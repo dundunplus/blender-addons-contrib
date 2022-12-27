@@ -1,7 +1,7 @@
 version: "1"
 rules:
   - base: master
-    upstream: blender-addons-contrib:master
+    upstream: blender:master
     mergeMethod: merge
   - base: blender-v3.3-release
     upstream: blender-v3.3-release
