@@ -1,14 +1,14 @@
 version: "1"
 rules:
-  - base: master
-    upstream: blender:master
+  - base: main
+    upstream: blender:main
+    mergeMethod: merge
+  - base: blender-v3.6-release
+    upstream: blender:blender-v3.6-release
     mergeMethod: merge
   - base: blender-v3.3-release
-    upstream: blender-v3.3-release
-    mergeMethod: hardreset
-  - base: blender-v3.4-release
-    upstream: blender-v3.4-release
-    mergeMethod: hardreset
+    upstream: blender:blender-v3.3-release
+    mergeMethod: merge
   - base: blender-v2.93-release
-    upstream: blender-v2.93-release
-    mergeMethod: hardreset
+    upstream: blender:blender-v2.93-release
+    mergeMethod: merge
