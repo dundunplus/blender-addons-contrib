@@ -33,10 +33,10 @@ bl_info = {
 
 import io, re
 import os, sys, zlib
+import struct, array
 import time, datetime
 import math, mathutils
 import bpy, bpy_extras
-import struct, numpy, array
 from bpy_extras import node_shader_utils
 from bpy_extras.image_utils import load_image
 from bpy_extras.io_utils import axis_conversion
@@ -107,11 +107,9 @@ VT_BLOB=65; VT_STREAM=66; VT_STORAGE=67; VT_STREAMED_OBJECT=68;
 VT_STORED_OBJECT=69; VT_BLOB_OBJECT=70; VT_CF=71; VT_CLSID=72;
 VT_VECTOR=0x1000;
 
+TYP_NAME = 0x0962
 INVALID_NAME = re.compile('^[0-9].*')
 UNPACK_BOX_DATA = struct.Struct('<HIHHBff').unpack_from  # Index, int, short, short, byte, float, Length
-
-DEBUG = False
-TYP_NAME = 0x0962
 
 CONFIG = []
 CLS_DATA = []
@@ -352,7 +350,6 @@ class MaxFileDirEntry:
 class ImportMaxFile:
 
     def __init__(self, filename=None, write_mode=False, debug=False):
-
         self.write_mode = write_mode
         self._filesize = None
         self.byte_order = None
@@ -631,59 +628,59 @@ class ImportMaxFile:
         fp = self.openstream(filename)
         data = {}
         try:
-            s = fp.read(28)
-            clsid = _clsid(s[8:24])
-            s = fp.read(20)
-            fmtid = _clsid(s[:16])
-            fp.seek(i32(s, 16))
-            s = b"****" + fp.read(i32(fp.read(4)) - 4)
-            num_props = i32(s, 4)
+            stream = fp.read(28)
+            clsid = _clsid(stream[8:24])
+            stream = fp.read(20)
+            fmtid = _clsid(stream[:16])
+            fp.seek(i32(stream, 16))
+            stream = b"****" + fp.read(i32(fp.read(4)) - 4)
+            num_props = i32(stream, 4)
         except BaseException as exc:
             return data
 
-        num_props = min(num_props, int(len(s) / 8))
+        num_props = min(num_props, int(len(stream) / 8))
         for i in range(num_props):
             property_id = 0
             try:
-                property_id = i32(s, 8 + i*8)
-                offset = i32(s, 12 + i*8)
-                property_type = i32(s, offset)
+                property_id = i32(stream, 8 + i*8)
+                offset = i32(stream, 12 + i*8)
+                property_type = i32(stream, offset)
                 if property_type == VT_I2:  # 16-bit signed integer
-                    value = i16(s, offset + 4)
+                    value = i16(stream, offset + 4)
                     if value >= 32768:
                         value = value - 65536
                 elif property_type == VT_UI2:  # 2-byte unsigned integer
-                    value = i16(s, offset + 4)
+                    value = i16(stream, offset + 4)
                 elif property_type in (VT_I4, VT_INT, VT_ERROR):
-                    value = i32(s, offset + 4)
+                    value = i32(stream, offset + 4)
                 elif property_type in (VT_UI4, VT_UINT):  # 4-byte unsigned integer
-                    value = i32(s, offset + 4)
+                    value = i32(stream, offset + 4)
                 elif property_type in (VT_BSTR, VT_LPSTR):
-                    count = i32(s, offset + 4)
-                    value = s[offset + 8:offset + 8 + count - 1]
+                    count = i32(stream, offset + 4)
+                    value = stream[offset + 8:offset + 8 + count - 1]
                     value = value.replace(b'\x00', b'')
                 elif property_type == VT_BLOB:
-                    count = i32(s, offset + 4)
-                    value = s[offset + 8:offset + 8 + count]
+                    count = i32(stream, offset + 4)
+                    value = stream[offset + 8:offset + 8 + count]
                 elif property_type == VT_LPWSTR:
-                    count = i32(s, offset + 4)
-                    value = self._decode_utf16_str(s[offset + 8:offset + 8 + count*2])
+                    count = i32(stream, offset + 4)
+                    value = self._decode_utf16_str(stream[offset + 8:offset + 8 + count*2])
                 elif property_type == VT_FILETIME:
-                    value = int(i32(s, offset + 4)) + (int(i32(s, offset + 8)) << 32)
+                    value = int(i32(stream, offset + 4)) + (int(i32(stream, offset + 8)) << 32)
                     if convert_time and property_id not in no_conversion:
                         _FILETIME_null_date = datetime.datetime(1601, 1, 1, 0, 0, 0)
                         value = _FILETIME_null_date + datetime.timedelta(microseconds=value // 10)
                     else:
                         value = value // 10000000
                 elif property_type == VT_UI1:  # 1-byte unsigned integer
-                    value = i8(s[offset + 4])
+                    value = i8(stream[offset + 4])
                 elif property_type == VT_CLSID:
-                    value = _clsid(s[offset + 4:offset + 20])
+                    value = _clsid(stream[offset + 4:offset + 20])
                 elif property_type == VT_CF:
-                    count = i32(s, offset + 4)
-                    value = s[offset + 8:offset + 8 + count]
+                    count = i32(stream, offset + 4)
+                    value = stream[offset + 8:offset + 8 + count]
                 elif property_type == VT_BOOL:
-                    value = bool(i16(s, offset + 4))
+                    value = bool(i16(stream, offset + 4))
                 else:
                     value = None
 
@@ -710,8 +707,8 @@ class MaxChunk():
 
     def __str__(self):
         if (self.unknown == True):
-            return "%s[%4x] %04X: %s" %("  "*self.level, self.number, self.types, ":".join("%02x"%(c) for c in self.data))
-        return "%s[%4x] %04X: %s=%s" %("  "*self.level, self.number, self.types, self.format, self.data)
+            return "%s[%4x] %04X: %s" %("" * self.level, self.number, self.types, ":".join("%02x"%(c) for c in self.data))
+        return "%s[%4x] %04X: %s=%s" %("" * self.level, self.number, self.types, self.format, self.data)
 
 
 class ByteArrayChunk(MaxChunk):
@@ -738,8 +735,8 @@ class ByteArrayChunk(MaxChunk):
 
     def set_le16_string(self, data):
         try:
-            l, o = get_long(data, 0)
-            self.data = data[o:o + l * 2].decode('utf-16-le')
+            long, offset = get_long(data, 0)
+            self.data = data[offset:offset + l * 2].decode('utf-16-le')
             if (self.data[-1] == b'\0'):
                 self.data = self.data[0:-1]
             self.format = "LStr16"
@@ -824,8 +821,8 @@ class SceneChunk(ContainerChunk):
 
     def __str__(self):
         if (self.unknown == True):
-            return "%s[%4x] %s" %("  "*self.level, self.number, get_class_name(self))
-        return "%s[%4x] %s: %s" %("  "*self.level, self.number, get_class_name(self), self.format)
+            return "%s[%4x] %s" %("" * self.level, self.number, get_class_name(self))
+        return "%s[%4x] %s: %s" %("" * self.level, self.number, get_class_name(self), self.format)
 
     def set_data(self, data):
         previous = None
@@ -837,20 +834,19 @@ class SceneChunk(ContainerChunk):
 
 class ChunkReader():
 
-    def __init__(self, name = None):
+    def __init__(self, name=None):
         self.name = name
 
     def get_chunks(self, data, level, containerReader, primitiveReader):
         chunks = []
         offset = 0
         if (level == 0):
-            t, o = get_short(data, 0)
-            l, o = get_long(data, o)
-            if (t == 0x8B1F):
-                t, o = get_long(data, o)
-                if (t == 0x0B000000):
+            short, ofst = get_short(data, 0)
+            long, ofst = get_long(data, ofst)
+            if (short == 0x8B1F):
+                short, ofst = get_long(data, ofst)
+                if (short == 0x0B000000):
                     data = zlib.decompress(data, zlib.MAX_WBITS|32)
-        if (level==0):
             print("  reading '%s'..."%self.name, len(data))
         while offset < len(data):
             old = offset
@@ -942,9 +938,9 @@ def get_class(chunk):
     return None
 
 
-def get_dll(container):
+def get_dll(chunk):
     global DLL_DIR_LIST
-    idx = container.get_first(0x2060).data[0]
+    idx = chunk.get_first(0x2060).data[0]
     if (idx < len(DLL_DIR_LIST)):
         return DLL_DIR_LIST[idx]
     return None
@@ -1088,7 +1084,7 @@ def get_rotation(pos):
             rotation = mathutils.Euler((rot[2], rot[1], rot[0])).to_quaternion()
         elif (uid == 0x0000000000442313):  # TCB Rotation
             rot = pos.get_first(0x2504).data
-            rotation = mathutils.Quaternion(rot[0], rot[1], rot[2], rot[3])
+            rotation = mathutils.Quaternion((rot[0], rot[1], rot[2], rot[3]))
         elif (uid == 0x000000004B4B1003):  #'Rotation List
             refs = get_references(pos)
             if (len(refs) > 3):
@@ -1149,7 +1145,7 @@ def create_matrix(prc):
 
 def get_property(properties, idx):
     for child in properties.children:
-        if (child.types == 0x100E):
+        if (child.types & 0x100E):
             if (get_short(child.data, 0)[0] == idx):
                 return child
     return None
@@ -1158,7 +1154,8 @@ def get_property(properties, idx):
 def get_color(colors, idx):
     prop = get_property(colors, idx)
     if (prop is not None):
-        col, offset = get_floats(prop.data, 15, 3)
+        siz = 15 if (len(prop.data) > 23) else 11
+        col, offset = get_floats(prop.data, siz, 3)
         return (col[0], col[1], col[2])
     return None
 
@@ -1166,7 +1163,7 @@ def get_color(colors, idx):
 def get_float(colors, idx):
     prop = get_property(colors, idx)
     if (prop is not None):
-        fl, offset = get_float(prp.data, 15)
+        fl, offset = get_float(prop.data, 15)
         return fl
     return None
 
@@ -1178,43 +1175,43 @@ def get_standard_material(refs):
             colors = refs[2]
             parameters = get_references(colors)[0]
             material = Material()
-            material.set('ambient',  get_color(parameters, 0x00))
-            material.set('diffuse',  get_color(parameters, 0x01))
+            material.set('ambient', get_color(parameters, 0x00))
+            material.set('diffuse', get_color(parameters, 0x01))
             material.set('specular', get_color(parameters, 0x02))
             material.set('emissive', get_color(parameters, 0x08))
             material.set('shinines', get_float(parameters, 0x0A))
             transparency = refs[4]  # ParameterBlock2
             material.set('transparency', get_float(transparency, 0x02))
     except:
-        print('Mat\n')
+        pass
     return material
 
 
 def get_vray_material(vry):
     material = Material()
     try:
-        material.set('diffuse',  get_color(vry, 0x01))
-        material.set('ambient',  get_color(vry, 0x02))
+        material.set('diffuse', get_color(vry, 0x01))
+        material.set('ambient', get_color(vry, 0x02))
         material.set('specular', get_color(vry, 0x05))
         material.set('emissive', get_color(vry, 0x05))
         material.set('shinines', get_float(vry, 0x0B))
         material.set('transparency', get_float(vry, 0x02))
     except:
-        print('VRay\n')
+        pass
     return material
 
 
 def get_arch_material(ad):
     material = Material()
     try:
-        material.set('diffuse',  get_color(ad, 0x1A))
-        material.set('ambient',  get_color(ad, 0x02))
+        material.set('diffuse', get_color(ad, 0x1A))
+        material.set('ambient', get_color(ad, 0x02))
         material.set('specular', get_color(ad, 0x05))
         material.set('emissive', get_color(ad, 0x05))
         material.set('shinines', get_float(ad, 0x0B))
         material.set('transparency', get_float(ad, 0x02))
     except:
-        print('Arch\n')
+        pass
     return material
 
 
@@ -1239,7 +1236,7 @@ def adjust_material(obj, mat):
             obj.data.materials.append(objMaterial)
             objMaterial.diffuse_color[:3] = material.get('diffuse', (0.8,0.8,0.8))
             objMaterial.specular_color[:3] = material.get('specular', (0,0,0))
-            objMaterial.roughness = material.get('shinines', 0.2)
+            objMaterial.roughness = 1.0 - material.get('shinines', 0.6)
 
 
 def create_shape(context, pts, indices, node, key, prc, mat):
@@ -1255,8 +1252,8 @@ def create_shape(context, pts, indices, node, key, prc, mat):
         nbr_faces = len(indices)
         shape.polygons.add(nbr_faces)
         shape.loops.add(nbr_faces * 3)
-        for v1, v2, v3 in indices:
-            data.extend((v3, v1, v2) if v3 == 0 else (v1, v2, v3))
+        for vtx in indices:
+            data.extend(vtx)
         shape.polygons.foreach_set("loop_start", range(0, nbr_faces * 3, 3))
         shape.loops.foreach_set("vertex_index", data)
 
@@ -1293,7 +1290,7 @@ def get_poly_4p(points):
     vertex = {}
     for point in points:
         ngon = point.points
-        key  = point.fH
+        key = point.fH
         if (key not in vertex):
             vertex[key] = []
         vertex[key].append(ngon)
@@ -1354,7 +1351,7 @@ def get_poly_data(chunk):
 
 def calc_point_3d(chunk):
     data = chunk.data
-    cnt, offset = get_long(data, 0)
+    count, offset = get_long(data, 0)
     pointlist = []
     try:
         while (offset < len(data)):
@@ -1374,7 +1371,7 @@ def calc_point_3d(chunk):
                 pointlist.append(pt)
     except Exception as exc:
         print('Error:\n')
-        print("%s: o = %d\n" %(exc, offset))
+        print("%s: offset = %d\n" %(exc, offset))
         raise exc
     return pointlist
 
@@ -1462,7 +1459,7 @@ def get_matrix_mesh_material(node):
 def adjust_matrix(obj, node):
     mtx = create_matrix(node).flatten()
     plc = mathutils.Matrix(*mtx)
-    obj.Placement = plc
+    obj.matrix_world = plc
     return plc
 
 
@@ -1514,7 +1511,7 @@ def make_scene(context, parent, level=0):
                 try:
                     create_object(context, chunk)
                 except Exception as exc:
-                    print('SceneError:', exc, chunk)
+                    print('ImportError:', exc, chunk)
 
 
 def read_scene(context, maxfile, filename):
