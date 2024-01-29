@@ -541,13 +541,14 @@ class _RepoCacheEntry:
 
     def _json_data_ensure(
             self,
+            *,
+            error_fn: Callable[[BaseException], None],
             check_files: bool = False,
             ignore_missing: bool = False,
-            error_fn: Optional[Callable[[BaseException], None]] = None,
     ) -> Any:
         if self._pkg_manifest_remote is not None:
             if check_files:
-                self._json_data_refresh()
+                self._json_data_refresh(error_fn=error_fn)
             return self._pkg_manifest_remote
 
         filepath_json = os.path.join(self.directory, REPO_LOCAL_JSON)
@@ -556,11 +557,7 @@ class _RepoCacheEntry:
             self._pkg_manifest_remote = json_from_filepath(filepath_json)
         except BaseException as ex:
             self._pkg_manifest_remote = None
-
-            if error_fn is not None:
-                error_fn(ex)
-            else:
-                print(ex)
+            error_fn(ex)
 
         self._pkg_manifest_local = None
         if self._pkg_manifest_remote is not None:
@@ -580,15 +577,40 @@ class _RepoCacheEntry:
 
         return self._pkg_manifest_remote
 
+    def _json_data_refresh_from_toml(
+            self,
+            *,
+            error_fn: Callable[[BaseException], None],
+            force: bool = False,
+    ) -> None:
+        assert self.repo_url == ""
+        # Since there is no remote repo the ID name is defined by the directory name only.
+        local_json_data = self.pkg_manifest_from_local_ensure(error_fn=error_fn)
+        if local_json_data is None:
+            return
+
+        filepath_json = os.path.join(self.directory, REPO_LOCAL_JSON)
+        print(self.directory, REPO_LOCAL_JSON)
+        with open(filepath_json, "w", encoding="utf-8") as fh:
+            # Indent because it can be useful to check this file if there are any issues.
+            fh.write(json.dumps(local_json_data, indent=2))
+
     def _json_data_refresh(
             self,
+            *,
+            error_fn: Callable[[BaseException], None],
             force: bool = False,
-            error_fn: Optional[Callable[[BaseException], None]] = None,
     ) -> None:
         if force or (self._pkg_manifest_remote is None) or (self._pkg_manifest_remote_mtime == 0):
             self._pkg_manifest_remote = None
             self._pkg_manifest_remote_mtime = 0
             self._pkg_manifest_local = None
+
+        # Detect a local-only repository, there is no server to sync with
+        # so generate the JSON from the TOML files.
+        # While redundant this avoids having support multiple code-paths for local-only/remote repos.
+        if self.repo_url == "":
+            self._json_data_refresh_from_toml(error_fn=error_fn, force=force)
 
         filepath_json = os.path.join(self.directory, REPO_LOCAL_JSON)
         mtime_test = file_mtime_or_none(filepath_json)
@@ -601,11 +623,7 @@ class _RepoCacheEntry:
             self._pkg_manifest_remote = json_from_filepath(filepath_json)
         except BaseException as ex:
             self._pkg_manifest_remote = None
-
-            if error_fn is not None:
-                error_fn(ex)
-            else:
-                print(ex)
+            error_fn(ex)
 
         self._pkg_manifest_local = None
         if self._pkg_manifest_remote is not None:
@@ -615,9 +633,13 @@ class _RepoCacheEntry:
 
     def pkg_manifest_from_local_ensure(
             self,
+            *,
+            error_fn: Callable[[BaseException], None],
             ignore_missing: bool = False,
-            error_fn: Optional[Callable[[BaseException], None]] = None,
     ) -> Optional[Dict[str, Dict[str, Any]]]:
+        # Important for local-only repositories (where the directory name defines the ID).
+        has_remote = self.repo_url != ""
+
         if self._pkg_manifest_local is None:
             self._json_data_ensure(
                 ignore_missing=ignore_missing,
@@ -625,37 +647,59 @@ class _RepoCacheEntry:
             )
             pkg_manifest_local = {}
             try:
-                dir_list = os.listdir(self.directory)
+                dir_entries = os.scandir(self.directory)
             except BaseException as ex:
-                dir_list = []
+                dir_entries = None
+                error_fn(ex)
 
-                if error_fn is not None:
-                    error_fn(ex)
-                else:
-                    print(ex)
+            for entry in (dir_entries if dir_entries is not None else ()):
+                # Only check directories.
+                if not entry.is_dir(follow_symlinks=True):
+                    continue
 
-            for d in dir_list:
-                filepath_toml = os.path.join(self.directory, d, PKG_MANIFEST_FILENAME_TOML)
+                filename = entry.name
+
+                # Simply ignore these paths without any warnings (accounts for `.git`, `__pycache__`, etc).
+                if filename.startswith((".", "_")):
+                    continue
+
+                # Report any paths that cannot be used.
+                if not filename.isidentifier():
+                    error_fn(Exception("\"{:s}\" is not a supported module name, skipping".format(
+                        os.path.join(self.directory, filename)
+                    )))
+                    continue
+
+                filepath_toml = os.path.join(self.directory, filename, PKG_MANIFEST_FILENAME_TOML)
                 try:
                     item_local = toml_from_filepath(filepath_toml)
                 except BaseException as ex:
                     item_local = None
-
-                    if error_fn is not None:
-                        error_fn(ex)
-                    else:
-                        print(ex)
+                    error_fn(ex)
 
                 if not item_local:
                     continue
-                pkg_manifest_local[item_local.pop("id")] = item_local
+
+                pkg_idname = item_local.pop("id")
+                if has_remote:
+                    # This should never happen, the user may have manually renamed a directory.
+                    if pkg_idname != filename:
+                        print("Skipping package with inconsistent name: \"{:s}\" mismatch \"{:s}\"".format(
+                            filename,
+                            pkg_idname,
+                        ))
+                        continue
+                else:
+                    pkg_idname = filename
+                pkg_manifest_local[pkg_idname] = item_local
             self._pkg_manifest_local = pkg_manifest_local
         return self._pkg_manifest_local
 
     def pkg_manifest_from_remote_ensure(
             self,
+            *,
+            error_fn: Callable[[BaseException], None],
             ignore_missing: bool = False,
-            error_fn: Optional[Callable[[BaseException], None]] = None,
     ) -> Optional[Dict[str, Dict[str, Any]]]:
         if self._pkg_manifest_remote is None:
             self._json_data_ensure(
@@ -706,32 +750,38 @@ class RepoCacheStore:
             self,
             directory: str,
             *,
+            error_fn: Callable[[BaseException], None],
             force: bool = False,
     ) -> None:
         for repo_entry in self._repos:
             if directory == repo_entry.directory:
-                repo_entry._json_data_refresh(force=force)
+                repo_entry._json_data_refresh(force=force, error_fn=error_fn)
                 return
         raise ValueError("Directory {:s} not a known repo".format(directory))
 
     def refresh_local_from_directory(
             self,
             directory: str,
+            *,
+            error_fn: Callable[[BaseException], None],
             ignore_missing: bool = False,
     ) -> Optional[Dict[str, Dict[str, Any]]]:
         for repo_entry in self._repos:
             if directory == repo_entry.directory:
                 # Force refresh.
                 repo_entry.force_local_refresh()
-                return repo_entry.pkg_manifest_from_local_ensure(ignore_missing=ignore_missing)
+                return repo_entry.pkg_manifest_from_local_ensure(
+                    ignore_missing=ignore_missing,
+                    error_fn=error_fn,
+                )
         raise ValueError("Directory {:s} not a known repo".format(directory))
 
     def pkg_manifest_from_remote_ensure(
             self,
             *,
+            error_fn: Callable[[BaseException], None],
             check_files: bool = False,
             ignore_missing: bool = False,
-            error_fn: Optional[Callable[[BaseException], None]] = None,
     ) -> Generator[Optional[Dict[str, Dict[str, Any]]], None, None]:
         for repo_entry in self._repos:
             json_data = repo_entry._json_data_ensure(
@@ -751,8 +801,8 @@ class RepoCacheStore:
     def pkg_manifest_from_local_ensure(
             self,
             *,
+            error_fn: Callable[[BaseException], None],
             check_files: bool = False,
-            error_fn: Optional[Callable[[BaseException], None]] = None,
     ) -> Generator[Optional[Dict[str, Dict[str, Any]]], None, None]:
         if check_files:
             for repo_entry in self._repos:
