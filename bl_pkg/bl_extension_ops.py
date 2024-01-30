@@ -79,8 +79,8 @@ blender_extension_show = set()
 # Map the enum value to the value in the manifest.
 blender_filter_by_type_map = {
     "ALL": "",
-    "ADDON": "add-on",
-    "KEYMAP": "key-map",
+    "ADDON": "addon",
+    "KEYMAP": "keymap",
     "THEME": "theme",
 }
 
@@ -1231,7 +1231,7 @@ class BlPkgPkgShowSettings(Operator):
 class BlPkgObsoleteMarked(Operator):
     """Zeroes package versions, useful for development - to test upgrading"""
     bl_idname = "bl_pkg.obsolete_marked"
-    bl_label = "Obsolete Marked Packages (Testing)"
+    bl_label = "Obsolete Marked"
 
     def execute(self, _context):
         from . import (

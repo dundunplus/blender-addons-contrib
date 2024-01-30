@@ -20,19 +20,14 @@ from bpy.types import (
 )
 
 from bl_ui.space_userpref import (
-    USERPREF_PT_extensions,
-    ExtensionsPanel,
+    USERPREF_PT_addons,
 )
 
 from . import repo_status_text
 
 
-# Allow marking packages.
-USE_MARK = False
-
-
 # -----------------------------------------------------------------------------
-#
+# Generic Utilities
 
 
 def size_as_fmt_string(num: float) -> str:
@@ -54,12 +49,141 @@ def sizes_as_percentage_string(size_partial: int, size_final: int) -> str:
     return "{:-6.2f}%".format(percent * 100)
 
 
-def userpref_addons_draw_ext(
+def extensions_panel_draw_legacy_addons(
+        layout,
+        context,
+        *,
+        search_lower,
+        installed_only,
+        used_addon_module_name_map,
+):
+    # NOTE: this duplicates logic from `USERPREF_PT_addons` eventually this logic should be used instead.
+    # Don't de-duplicate the logic as this is a temporary state - as long as extensions remains experimental.
+    import addon_utils
+    from bpy.app.translations import (
+        pgettext_iface as iface_,
+    )
+    from .bl_extension_ops import (
+        pkg_info_check_exclude_filter,
+    )
+
+    addons = [
+        (mod, addon_utils.module_bl_info(mod))
+        for mod in addon_utils.modules(refresh=False)
+    ]
+
+    # Initialized on demand.
+    user_addon_paths = []
+
+    for mod, info in addons:
+        module_name = mod.__name__
+        is_extension = addon_utils.check_extension(module_name)
+        if is_extension:
+            continue
+
+        if search_lower and (not pkg_info_check_exclude_filter(info, search_lower)):
+            continue
+
+        is_enabled = module_name in used_addon_module_name_map
+
+        col_box = layout.column()
+        box = col_box.box()
+        colsub = box.column()
+        row = colsub.row(align=True)
+
+        row.operator(
+            "preferences.addon_expand",
+            icon='DISCLOSURE_TRI_DOWN' if info["show_expanded"] else 'DISCLOSURE_TRI_RIGHT',
+            emboss=False,
+        ).module = module_name
+
+        row.operator(
+            "preferences.addon_disable" if is_enabled else "preferences.addon_enable",
+            icon='CHECKBOX_HLT' if is_enabled else 'CHECKBOX_DEHLT', text="",
+            emboss=False,
+        ).module = module_name
+
+        sub = row.row()
+        sub.active = is_enabled
+        sub.label(text=info["name"])
+
+        if info["warning"]:
+            sub.label(icon='ERROR')
+
+        row_right = row.row()
+        row_right.alignment = 'RIGHT'
+
+        row_right.label(text="Installed (Legacy)   ")
+        row_right.active = False
+
+        if info["show_expanded"]:
+            split = box.split(factor=0.15)
+            col_a = split.column()
+            col_b = split.column()
+            if value := info["description"]:
+                col_a.label(text="Description:")
+                col_b.label(text=iface_(value))
+            if value := info["author"]:
+                col_a.label(text="Author:")
+                col_b.label(text=value, translate=False)
+            if value := info["version"]:
+                col_a.label(text="Version:")
+                col_b.label(text=".".join(str(x) for x in value), translate=False)
+            if value := info["warning"]:
+                col_a.label(text="Warning:")
+                col_b.label(text="  " + iface_(value), icon='ERROR')
+            del value
+
+            # Include for consistency.
+            col_a.label(text="Type:")
+            col_b.label(text="addons")
+
+            user_addon = USERPREF_PT_addons.is_user_addon(mod, user_addon_paths)
+
+            if info["doc_url"] or info.get("tracker_url"):
+                split = box.row().split(factor=0.15)
+                split.label(text="Internet:")
+                sub = split.row()
+                if info["doc_url"]:
+                    sub.operator(
+                        "wm.url_open", text="Documentation", icon='HELP',
+                    ).url = info["doc_url"]
+                # Only add "Report a Bug" button if tracker_url is set
+                # or the add-on is bundled (use official tracker then).
+                if info.get("tracker_url"):
+                    sub.operator(
+                        "wm.url_open", text="Report a Bug", icon='URL',
+                    ).url = info["tracker_url"]
+                elif not user_addon:
+                    addon_info = (
+                        "Name: %s %s\n"
+                        "Author: %s\n"
+                    ) % (info["name"], str(info["version"]), info["author"])
+                    props = sub.operator(
+                        "wm.url_open_preset", text="Report a Bug", icon='URL',
+                    )
+                    props.type = 'BUG_ADDON'
+                    props.id = addon_info
+
+            if user_addon:
+                rowsub = col_b.row()
+                rowsub.alignment = 'RIGHT'
+                rowsub.operator(
+                    "preferences.addon_remove", text="Remove", icon='CANCEL',
+                ).module = module_name
+
+            if is_enabled:
+                if (addon_preferences := used_addon_module_name_map[module_name].preferences) is not None:
+                    USERPREF_PT_addons.draw_addon_preferences(layout, context, addon_preferences)
+
+
+def extensions_panel_draw_impl(
         self,
-        _context,
+        context,
         search_lower,
         filter_by_type,
         installed_only,
+        show_development,
 ):
     """
     Show all the items... we may want to paginate at some point.
@@ -85,6 +209,11 @@ def userpref_addons_draw_ext(
     layout_topmost = layout.column()
 
     repos_all = extension_repos_read()
+
+    # To access enabled add-ons.
+    show_addons = filter_by_type in {"", "addon"}
+    if show_addons:
+        used_addon_module_name_map = {addon.module: addon for addon in context.preferences.addons}
 
     remote_ex = None
     local_ex = None
@@ -143,14 +272,13 @@ def userpref_addons_draw_ext(
             if search_lower and (not pkg_info_check_exclude_filter(item_remote, search_lower)):
                 continue
 
-            item_version = item_remote["version"]
-
             item_local = pkg_manifest_local.get(pkg_id)
             is_installed = item_local is not None
 
             if installed_only and (is_installed == 0):
                 continue
 
+            item_version = item_remote["version"]
             if item_local is None:
                 item_local_version = None
                 is_outdated = False
@@ -158,8 +286,16 @@ def userpref_addons_draw_ext(
                 item_local_version = item_local["version"]
                 is_outdated = item_local_version != item_version
 
+            if is_installed and (item_local["type"] == "addon"):
+                addon_module_name = "bl_ext.{:s}.{:s}".format(repos_all[repo_index].module, pkg_id)
+                is_enabled_addon = addon_module_name in used_addon_module_name_map
+            else:
+                is_enabled_addon = False
+                addon_module_name = None
+
             key = (pkg_id, repo_index)
-            mark = key in blender_extension_mark
+            if show_development:
+                mark = key in blender_extension_mark
             show = key in blender_extension_show
             del key
 
@@ -183,20 +319,27 @@ def userpref_addons_draw_ext(
             if is_outdated:
                 label = label + " (outdated)"
 
-            if USE_MARK:
+            if show_development:
                 if mark:
-                    props = row_button.operator("bl_pkg.pkg_mark_clear", text=label, icon='CHECKBOX_HLT', emboss=False)
+                    props = row_button.operator("bl_pkg.pkg_mark_clear", text="", icon='RADIOBUT_ON', emboss=False)
                 else:
-                    props = row_button.operator("bl_pkg.pkg_mark_set", text=label, icon='CHECKBOX_DEHLT', emboss=False)
+                    props = row_button.operator("bl_pkg.pkg_mark_set", text="", icon='RADIOBUT_OFF', emboss=False)
                 props.pkg_id = pkg_id
                 props.repo_index = repo_index
                 del props
 
-                row_button.active = mark
-                del row_button
+            if is_installed and (addon_module_name is not None):
+                row_button.operator(
+                    "preferences.addon_disable" if is_enabled_addon else "preferences.addon_enable",
+                    icon='CHECKBOX_HLT' if is_enabled_addon else 'CHECKBOX_DEHLT',
+                    text=label,
+                    emboss=False,
+                ).module = addon_module_name
             else:
+                # Use a blank icon to avoid odd text alignment when mixing with installed add-ons.
                 row_button.active = is_installed
-                row_button.label(text=label)
+                row_button.label(text=label, icon='BLANK1')
+            del label
 
             row_right = row.row()
             row_right.alignment = 'RIGHT'
@@ -225,41 +368,53 @@ def userpref_addons_draw_ext(
 
             if show:
                 split = box.split(factor=0.15)
-                row_a = split.column()
-                row_b = split.column()
+                col_a = split.column()
+                col_b = split.column()
 
-                row_a.label(text="Version:")
-                if item_local_version is not None and (item_version != item_local_version):
-                    row_b.label(text="{:s} ({:s} available)".format(item_local_version, item_version))
+                col_a.label(text="Version:")
+                if is_outdated:
+                    col_b.label(text="{:s} ({:s} available)".format(item_local_version, item_version))
                 else:
-                    row_b.label(text=item_version)
+                    col_b.label(text=item_version)
 
-                row_a.label(text="Description:")
-                row_b.label(text=item_remote["description"])
+                col_a.label(text="Description:")
+                col_b.label(text=item_remote["description"])
 
                 if has_remote:
-                    row_a.label(text="Size:")
-                    row_b.label(text=size_as_fmt_string(item_remote["archive_size"]))
+                    col_a.label(text="Size:")
+                    col_b.label(text=size_as_fmt_string(item_remote["archive_size"]))
+
+                if not filter_by_type:
+                    col_a.label(text="Type:")
+                    col_b.label(text=item_remote["type"])
 
                 if len(repos_all) > 1:
-                    row_a.label(text="Repository:")
-                    row_b.label(text=repos_all[repo_index].name)
+                    col_a.label(text="Repository:")
+                    col_b.label(text=repos_all[repo_index].name)
 
                 # Note that we could allow removing extensions from non-remote extension repos
                 # although this is destructive, so don't enable this right now.
                 if is_installed and has_remote:
-                    # Include uninstall below.
-                    props = row_a.operator("bl_pkg.pkg_uninstall", text="Remove")
-                    props.repo_index = repo_index
-                    props.pkg_id = pkg_id
-                    del props
-
-                    rowsub = row_b.row()
+                    rowsub = col_b.row()
                     rowsub.alignment = 'RIGHT'
-                    props = rowsub.operator("bl_pkg.pkg_show_settings", text="", icon='SETTINGS')
+                    props = rowsub.operator("bl_pkg.pkg_uninstall", text="Remove")
                     props.repo_index = repo_index
                     props.pkg_id = pkg_id
                     del props, rowsub
+
+                # Show addon user preferences.
+                if is_enabled_addon:
+                    if (addon_preferences := used_addon_module_name_map[addon_module_name].preferences) is not None:
+                        USERPREF_PT_addons.draw_addon_preferences(layout, context, addon_preferences)
+
+    if show_addons:
+        extensions_panel_draw_legacy_addons(
+            layout,
+            context,
+            search_lower=search_lower,
+            installed_only=installed_only,
+            used_addon_module_name_map=used_addon_module_name_map,
+        )
 
 
 class USERPREF_PT_extensions_bl_pkg_filter(Panel):
@@ -282,88 +437,101 @@ class USERPREF_MT_extensions_bl_pkg_settings(Menu):
     def draw(self, context):
         layout = self.layout
 
-        if USE_MARK:
-            layout.operator("bl_pkg.pkg_install_marked", text="Install Marked", icon='IMPORT')
-            layout.operator("bl_pkg.pkg_uninstall_marked", text="Uninstall Marked", icon='X')
-            layout.operator("bl_pkg.obsolete_marked")
+        addon_prefs = context.preferences.addons[__package__].preferences
 
         layout.operator("bl_pkg.repo_sync_all", text="Check for Updates", icon='FILE_REFRESH')
         layout.operator("bl_pkg.pkg_upgrade_all", text="Upgrade All", icon='FILE_REFRESH')
 
-        layout.operator("bl_pkg.repo_lock")
-        layout.operator("bl_pkg.repo_unlock")
+        layout.separator()
+
+        layout.operator("preferences.addon_install", icon='IMPORT', text="Install Legacy Add-on...")
+
+        layout.separator()
+
+        layout.prop(addon_prefs, "show_development")
+
+        if addon_prefs.show_development:
+            layout.separator()
+
+            layout.operator("bl_pkg.pkg_install_marked", text="Install Marked", icon='IMPORT')
+            layout.operator("bl_pkg.pkg_uninstall_marked", text="Uninstall Marked", icon='X')
+            layout.operator("bl_pkg.obsolete_marked")
+
+            layout.separator()
+
+            layout.operator("bl_pkg.repo_lock")
+            layout.operator("bl_pkg.repo_unlock")
 
 
-class USERPREF_PT_extensions_bl_pkg(ExtensionsPanel, Panel):
-    bl_label = "Extensions"
-    # Keep header so panel can be moved under the repositories list until design is finished.
-    # bl_options = {'HIDE_HEADER'}
+def extensions_panel_draw(panel, context):
+    from .bl_extension_ops import (
+        blender_filter_by_type_map,
+    )
 
-    def draw(self, context):
-        from .bl_extension_ops import (
-            blender_filter_by_type_map,
-        )
+    wm = context.window_manager
+    layout = panel.layout
 
-        wm = context.window_manager
-        layout = self.layout
+    row = layout.split(factor=0.5)
+    row_a = row.row()
+    row_a.prop(wm, "extension_search", text="", icon='VIEWZOOM')
+    row_b = row.row()
+    row_b.prop(wm, "extension_type", text="")
+    row_b.popover("USERPREF_PT_extensions_bl_pkg_filter", text="", icon='FILTER')
 
-        row = layout.row()
-        rowsub = row.split(factor=0.75)
-        rowsub.prop(wm, "extension_search", text="", icon='VIEWZOOM')
-        rowsub.prop(wm, "extension_type", text="")
+    row_b.separator_spacer()
+    row_b.menu("USERPREF_MT_extensions_bl_pkg_settings", text="", icon='DOWNARROW_HLT')
+    row_b.popover("USERPREF_PT_extensions_repos", text="", icon='PREFERENCES')
+    del row, row_a, row_b
+
+    if repo_status_text.log:
+        box = layout.box()
+        row = box.split(factor=0.5, align=True)
+        if repo_status_text.running:
+            row.label(text=repo_status_text.title + "...")
+        else:
+            row.label(text=repo_status_text.title)
         rowsub = row.row(align=True)
-        rowsub.popover("USERPREF_PT_extensions_bl_pkg_filter", text="", icon='FILTER')
-        rowsub.menu("USERPREF_MT_extensions_bl_pkg_settings", text="", icon='PREFERENCES')
-        del rowsub
-
-        if repo_status_text.log:
-            box = layout.box()
-            row = box.split(factor=0.5, align=True)
-            if repo_status_text.running:
-                row.label(text=repo_status_text.title + "...")
-            else:
-                row.label(text=repo_status_text.title)
-            rowsub = row.row(align=True)
-            rowsub.alignment = 'RIGHT'
-            rowsub.operator("bl_pkg.pkg_status_clear", text="", icon='X', emboss=False)
-            boxsub = box.box()
-            for ty, msg in repo_status_text.log:
-                if ty == 'STATUS':
-                    boxsub.label(text=msg)
-                elif ty == 'PROGRESS':
-                    msg_str, progress_unit, progress, progress_range = msg
-                    if progress <= progress_range:
-                        boxsub.progress(
-                            factor=progress / progress_range,
-                            text="{:s}, {:s}".format(
-                                sizes_as_percentage_string(progress, progress_range),
-                                msg_str,
-                            ),
-                        )
-                    elif progress_unit == 'BYTE':
-                        boxsub.progress(factor=0.0, text="{:s}, {:s}".format(msg_str, size_as_fmt_string(progress)))
-                    else:
-                        # We might want to support other types.
-                        boxsub.progress(factor=0.0, text="{:s}, {:d}".format(msg_str, progress))
+        rowsub.alignment = 'RIGHT'
+        rowsub.operator("bl_pkg.pkg_status_clear", text="", icon='X', emboss=False)
+        boxsub = box.box()
+        for ty, msg in repo_status_text.log:
+            if ty == 'STATUS':
+                boxsub.label(text=msg)
+            elif ty == 'PROGRESS':
+                msg_str, progress_unit, progress, progress_range = msg
+                if progress <= progress_range:
+                    boxsub.progress(
+                        factor=progress / progress_range,
+                        text="{:s}, {:s}".format(
+                            sizes_as_percentage_string(progress, progress_range),
+                            msg_str,
+                        ),
+                    )
+                elif progress_unit == 'BYTE':
+                    boxsub.progress(factor=0.0, text="{:s}, {:s}".format(msg_str, size_as_fmt_string(progress)))
                 else:
-                    boxsub.label(text="{:s}: {:s}".format(ty, msg))
+                    # We might want to support other types.
+                    boxsub.progress(factor=0.0, text="{:s}, {:d}".format(msg_str, progress))
+            else:
+                boxsub.label(text="{:s}: {:s}".format(ty, msg))
 
-            # Hide when running.
-            if repo_status_text.running:
-                return
+        # Hide when running.
+        if repo_status_text.running:
+            return
 
-        userpref_addons_draw_ext(
-            self,
-            context,
-            wm.extension_search.lower(),
-            blender_filter_by_type_map[wm.extension_type],
-            wm.extension_installed_only,
-        )
+    addon_prefs = context.preferences.addons[__package__].preferences
+
+    extensions_panel_draw_impl(
+        panel,
+        context,
+        wm.extension_search.lower(),
+        blender_filter_by_type_map[wm.extension_type],
+        wm.extension_installed_only,
+        addon_prefs.show_development,
+    )
 
 
 classes = (
-    USERPREF_PT_extensions_bl_pkg,
-
     # Pop-overs.
     USERPREF_PT_extensions_bl_pkg_filter,
     USERPREF_MT_extensions_bl_pkg_settings,
@@ -371,12 +539,14 @@ classes = (
 
 
 def register():
-    USERPREF_PT_extensions.unused = False
+    USERPREF_PT_addons.append(extensions_panel_draw)
+
     for cls in classes:
         bpy.utils.register_class(cls)
 
 
 def unregister():
-    USERPREF_PT_extensions.unused = True
+    USERPREF_PT_addons.remove(extensions_panel_draw)
+
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

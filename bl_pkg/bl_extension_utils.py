@@ -23,7 +23,9 @@ __all__ = (
     "dummy_progress",
 
     # Public API.
-    "json_from_local_dir",
+    "json_from_filepath",
+    "toml_from_filepath",
+    "json_to_filepath",
 
     "CommandBatch",
     "RepoCacheStore",
@@ -69,7 +71,7 @@ REPO_LOCAL_PRIVATE_DIR = ".blender_ext"
 REPO_LOCAL_PRIVATE_LOCK = "bl_ext_repo.lock"
 
 PKG_REPO_LIST_FILENAME = "bl_ext_repo.json"
-PKG_MANIFEST_FILENAME_TOML = "bl_manifest.toml"
+PKG_MANIFEST_FILENAME_TOML = "blender_manifest.toml"
 
 # Add this to the local JSON file.
 REPO_LOCAL_JSON = os.path.join(REPO_LOCAL_PRIVATE_DIR, PKG_REPO_LIST_FILENAME)
@@ -303,14 +305,16 @@ def dummy_progress(
 # Public (non-command-line-wrapping) functions
 #
 
-def json_from_filepath(filepath_json: str) -> Any:
+def json_from_filepath(filepath_json: str) -> Optional[Dict[str, Any]]:
     if os.path.exists(filepath_json):
         with open(filepath_json, "r", encoding="utf-8") as fh:
-            return json.loads(fh.read())
+            result = json.loads(fh.read())
+            assert isinstance(result, dict)
+            return result
     return None
 
 
-def toml_from_filepath(filepath_json: str) -> Any:
+def toml_from_filepath(filepath_json: str) -> Optional[Dict[str, Any]]:
     if os.path.exists(filepath_json):
         with open(filepath_json, "r", encoding="utf-8") as fh:
             return tomllib.loads(fh.read())
@@ -322,15 +326,30 @@ def json_to_filepath(filepath_json: str, data: Any) -> None:
         fh.write(json.dumps(data))
 
 
-def json_from_local_dir(local_dir: str) -> Any:
-    return json_from_filepath(os.path.join(local_dir, REPO_LOCAL_JSON))
-
-
 def pkg_make_obsolete_for_testing(local_dir: str, pkg_id: str) -> None:
+    import re
     filepath = os.path.join(local_dir, pkg_id, PKG_MANIFEST_FILENAME_TOML)
-    data = toml_from_filepath(filepath)
-    data["version"] = "0.0.0"
-    json_to_filepath(filepath, data)
+    # Weak! use basic matching to replace the version, not nice but OK as a debugging option.
+    with open(filepath, "r", encoding="utf-8") as fh:
+        data = fh.read()
+
+    def key_replace(match: re.Match[str]) -> str:
+        return "version = \"0.0.0\""
+
+    data = re.sub(r"^\s*version\s*=\s*\"[^\"]+\"", key_replace, data, flags=re.MULTILINE)
+    with open(filepath, "w", encoding="utf-8") as fh:
+        fh.write(data)
+
+
+def pkg_validate_data_or_error(pkg_idname: str, data: Dict[str, Any]) -> Optional[str]:
+    # Exception! In in general `cli` shouldn't be considered a Python module,
+    # it's validation function is handy to reuse.
+    from .cli.blender_ext import pkg_manifest_from_dict_and_validate
+    assert "id" not in data
+    result = pkg_manifest_from_dict_and_validate(pkg_idname, data)
+    if isinstance(result, str):
+        return result
+    return None
 
 
 # -----------------------------------------------------------------------------
@@ -590,7 +609,6 @@ class _RepoCacheEntry:
             return
 
         filepath_json = os.path.join(self.directory, REPO_LOCAL_JSON)
-        print(self.directory, REPO_LOCAL_JSON)
         with open(filepath_json, "w", encoding="utf-8") as fh:
             # Indent because it can be useful to check this file if there are any issues.
             fh.write(json.dumps(local_json_data, indent=2))
@@ -677,7 +695,7 @@ class _RepoCacheEntry:
                     item_local = None
                     error_fn(ex)
 
-                if not item_local:
+                if item_local is None:
                     continue
 
                 pkg_idname = item_local.pop("id")
@@ -691,6 +709,12 @@ class _RepoCacheEntry:
                         continue
                 else:
                     pkg_idname = filename
+
+                # Validate so local-only packages with invalid manifests aren't used.
+                if (error_str := pkg_validate_data_or_error(pkg_idname, item_local)):
+                    error_fn(Exception(error_str))
+                    continue
+
                 pkg_manifest_local[pkg_idname] = item_local
             self._pkg_manifest_local = pkg_manifest_local
         return self._pkg_manifest_local
