@@ -79,7 +79,7 @@ blender_extension_show = set()
 # Map the enum value to the value in the manifest.
 blender_filter_by_type_map = {
     "ALL": "",
-    "ADDON": "addon",
+    "ADDON": "add-on",
     "KEYMAP": "keymap",
     "THEME": "theme",
 }
@@ -211,7 +211,7 @@ def _preferences_ensure_disabled(*, repo_item, pkg_id_sequence, default_set):
 
     # NOTE(@ideasman42): clearing the modules is not great practice,
     # however we need to ensure this is fully un-loaded then reloaded.
-    for key, value in list(sys.modules.items()):
+    for key in list(sys.modules.keys()):
         if not key.startswith(prefix_base):
             continue
         if not (
@@ -313,26 +313,6 @@ def _extension_repos_index_from_directory(directory):
             if os.path.normpath(repo_item.directory) == directory:
                 return i
     return -1
-
-
-def _extension_repos_add(directory, repo_url):
-    addon_prefs = bpy.context.preferences.addons[__package__].preferences
-    repo_item = addon_prefs.repos.add()
-    repo_item.directory = directory
-    repo_item.repo_url = repo_url
-    # Pick a name, the update function ensures it's a valid module name & unique.
-    repo_item.module = directory.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
-    addon_prefs.active_repo_index = len(addon_prefs.repos) - 1
-
-
-def _extension_repos_remove(directory):
-    addon_prefs = bpy.context.preferences.addons[__package__].preferences
-    i = _extension_repos_index_from_directory(directory)
-    if i == -1:
-        return
-    if i >= addon_prefs.active_repo_index:
-        addon_prefs.active_repo_index -= 1
-    addon_prefs.repos.remove(i)
 
 
 def _extensions_repo_from_directory(directory):
@@ -761,7 +741,7 @@ class BlPkgPkgUpgradeAll(Operator, _BlPkgCmdMixIn):
             self._repo_directories.add(repo_item.directory)
 
         if not cmd_batch:
-            self.report({'ERROR'}, "No installed packages to upgrade")
+            self.report({'ERROR'}, "No installed packages to update")
             return None
 
         # Lock repositories.
@@ -1217,7 +1197,7 @@ class BlPkgPkgShowSettings(Operator):
     pkg_id: rna_prop_pkg_id
     repo_index: rna_prop_repo_index
 
-    def execute(self, context):
+    def execute(self, _context):
         repo_item = extension_repos_read_index(self.repo_index)
         bpy.ops.preferences.addon_show(module="bl_ext.{:s}.{:s}".format(repo_item.module, self.pkg_id))
         return {'FINISHED'}
