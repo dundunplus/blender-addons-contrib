@@ -130,23 +130,23 @@ def blender_test_run(temp_dir_local: str) -> None:
     repo = preferences.filepaths.extension_repos.new(
         name="My Test",
         module="my_repo",
-        directory=temp_dir_local,
+        custom_directory=temp_dir_local,
         remote_path=repo_url,
     )
 
     bpy.ops.bl_pkg.dummy_progress()
 
     bpy.ops.bl_pkg.repo_sync(
-        directory=temp_dir_local,
+        repo_directory=temp_dir_local,
     )
 
     bpy.ops.bl_pkg.pkg_install(
-        directory=temp_dir_local,
+        repo_directory=temp_dir_local,
         pkg_id="blue",
     )
 
     bpy.ops.bl_pkg.pkg_uninstall(
-        directory=temp_dir_local,
+        repo_directory=temp_dir_local,
         pkg_id="blue",
     )
 

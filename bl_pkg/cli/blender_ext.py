@@ -216,17 +216,16 @@ class PkgManifest(NamedTuple):
     id: str
     name: str
     tagline: str
-    description: str
     version: str
     type: str
     tags: List[str]
-    author: List[str]
+    maintainer: str
     license: List[str]
     blender_version_min: str
 
     # Optional.
     blender_version_max: str = ""
-    homepage: str = ""
+    website: str = ""
     copyright: Optional[List[str]] = []
 
 
@@ -662,16 +661,15 @@ pkg_manifest_known_keys_and_types: Tuple[Tuple[str, type, Optional[Callable[[Any
     ("schema_version", str, pkg_manifest_validate_field_any_version),
     ("name", str, pkg_manifest_validate_field_any_non_empty_string),
     ("tagline", str, None),
-    ("description", str, None),
     ("version", str, pkg_manifest_validate_field_any_version),
     ("type", str, pkg_manifest_validate_field_type),
     ("tags", list, pkg_manifest_validate_field_any_list_of_non_empty_strings),
-    ("author", list, pkg_manifest_validate_field_any_list_of_non_empty_strings),
+    ("maintainer", str, pkg_manifest_validate_field_any_non_empty_string),
     ("license", list, pkg_manifest_validate_field_any_list_of_non_empty_strings),
     ("blender_version_min", str, pkg_manifest_validate_field_any_version_primitive),
 
     # Optional.
-    ("homepage", str, None),
+    ("website", str, None),
     ("copyright", list, pkg_manifest_validate_field_any_list_of_non_empty_strings),
     ("blender_version_max", str, pkg_manifest_validate_field_any_version_primitive_or_empty),
 )
@@ -1721,11 +1719,10 @@ class subcmd_dummy:
                     fh.write("""name = "{:s}"\n""".format(pkg_name))
                     fh.write("""type = "add-on"\n""")
                     fh.write("""tags = []\n""")
-                    fh.write("""author = ["Developer Name"]\n""")
+                    fh.write("""maintainer = "Maintainer Name"\n""")
                     fh.write("""license = ["SPDX:GPL-2.0-or-later"]\n""")
                     fh.write("""version = "1.0.0"\n""")
                     fh.write("""tagline = "This is a tagline"\n""")
-                    fh.write("""description = "This is a package"\n""")
                     fh.write("""blender_version_min = "0.0.0"\n""")
 
                 with open(os.path.join(pkg_src_dir, "__init__.py"), "w", encoding="utf-8") as fh:

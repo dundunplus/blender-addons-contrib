@@ -54,6 +54,7 @@ def extensions_panel_draw_legacy_addons(
         context,
         *,
         search_lower,
+        enabled_only,
         installed_only,
         used_addon_module_name_map,
 ):
@@ -64,7 +65,7 @@ def extensions_panel_draw_legacy_addons(
         pgettext_iface as iface_,
     )
     from .bl_extension_ops import (
-        pkg_info_check_exclude_filter,
+        pkg_info_check_exclude_filter_ex,
     )
 
     addons = [
@@ -81,10 +82,18 @@ def extensions_panel_draw_legacy_addons(
         if is_extension:
             continue
 
-        if search_lower and (not pkg_info_check_exclude_filter(bl_info, search_lower)):
+        if search_lower and (
+                not pkg_info_check_exclude_filter_ex(
+                    bl_info["name"],
+                    bl_info["description"],
+                    search_lower,
+                )
+        ):
             continue
 
         is_enabled = module_name in used_addon_module_name_map
+        if enabled_only and (not is_enabled):
+            continue
 
         col_box = layout.column()
         box = col_box.box()
@@ -186,6 +195,7 @@ def extensions_panel_draw_impl(
         context,
         search_lower,
         filter_by_type,
+        enabled_only,
         installed_only,
         show_development,
 ):
@@ -283,6 +293,17 @@ def extensions_panel_draw_impl(
             if installed_only and (is_installed == 0):
                 continue
 
+            if is_installed and (item_local["type"] == "add-on"):
+                addon_module_name = "bl_ext.{:s}.{:s}".format(repos_all[repo_index].module, pkg_id)
+                is_enabled_addon = addon_module_name in used_addon_module_name_map
+
+                # This only makes sense for add-ons at the moment.
+                if enabled_only and (not is_enabled_addon):
+                    continue
+            else:
+                is_enabled_addon = False
+                addon_module_name = None
+
             item_version = item_remote["version"]
             if item_local is None:
                 item_local_version = None
@@ -290,13 +311,6 @@ def extensions_panel_draw_impl(
             else:
                 item_local_version = item_local["version"]
                 is_outdated = item_local_version != item_version
-
-            if is_installed and (item_local["type"] == "add-on"):
-                addon_module_name = "bl_ext.{:s}.{:s}".format(repos_all[repo_index].module, pkg_id)
-                is_enabled_addon = addon_module_name in used_addon_module_name_map
-            else:
-                is_enabled_addon = False
-                addon_module_name = None
 
             key = (pkg_id, repo_index)
             if show_development:
@@ -377,15 +391,15 @@ def extensions_panel_draw_impl(
                 col_b = split.column()
 
                 col_a.label(text="Description:")
-                col_b.label(text=item_remote["description"])
+                # The full description may be multiple lines (not yet supported by Blender's UI).
+                col_b.label(text=item_remote["tagline"])
 
                 if is_installed:
                     col_a.label(text="Path:")
                     col_b.label(text=os.path.join(repos_all[repo_index].directory, pkg_id), translate=False)
 
-                # Authors (hide-emails) we might want to limit this if some extensions have 10+ authors.
-                col_a.label(text="Author:")
-                col_b.label(text=",".join([x.split("<", 1)[0].strip() for x in item_remote["author"]]))
+                col_a.label(text="Maintainer:")
+                col_b.label(text=item_remote["maintainer"])
 
                 col_a.label(text="License:")
                 col_b.label(text=",".join([x.removeprefix("SPDX:") for x in item_remote["license"]]))
@@ -395,6 +409,7 @@ def extensions_panel_draw_impl(
                     col_b.label(text="{:s} ({:s} available)".format(item_local_version, item_version))
                 else:
                     col_b.label(text=item_version)
+
                 if has_remote:
                     col_a.label(text="Size:")
                     col_b.label(text=size_as_fmt_string(item_remote["archive_size"]))
@@ -407,11 +422,11 @@ def extensions_panel_draw_impl(
                     col_a.label(text="Repository:")
                     col_b.label(text=repos_all[repo_index].name)
 
-                if value := item_remote.get("homepage"):
+                if value := item_remote.get("website"):
                     col_a.label(text="Internet:")
                     # Use half size button, for legacy add-ons there are two, here there is one
                     # however one large button looks silly, so use a half size still.
-                    col_b.split(factor=0.5).operator("wm.url_open", text="Homepage", icon='HELP').url = value
+                    col_b.split(factor=0.5).operator("wm.url_open", text="Website", icon='HELP').url = value
                 del value
 
                 # Note that we could allow removing extensions from non-remote extension repos
@@ -434,6 +449,7 @@ def extensions_panel_draw_impl(
             layout,
             context,
             search_lower=search_lower,
+            enabled_only=enabled_only,
             installed_only=installed_only,
             used_addon_module_name_map=used_addon_module_name_map,
         )
@@ -450,6 +466,7 @@ class USERPREF_PT_extensions_bl_pkg_filter(Panel):
         layout = self.layout
 
         wm = context.window_manager
+        layout.prop(wm, "extension_enabled_only")
         layout.prop(wm, "extension_installed_only")
 
 
@@ -512,7 +529,7 @@ def extensions_panel_draw(panel, context):
     row_b.prop(wm, "extension_type", text="")
     row_b.popover("USERPREF_PT_extensions_bl_pkg_filter", text="", icon='FILTER')
 
-    row_b.separator_spacer()
+    row_b.separator()
     row_b.menu("USERPREF_MT_extensions_bl_pkg_settings", text="", icon='DOWNARROW_HLT')
     row_b.popover("USERPREF_PT_extensions_repos", text="", icon='PREFERENCES')
     del row, row_a, row_b
@@ -560,6 +577,7 @@ def extensions_panel_draw(panel, context):
         context,
         wm.extension_search.lower(),
         blender_filter_by_type_map[wm.extension_type],
+        wm.extension_enabled_only,
         wm.extension_installed_only,
         addon_prefs.show_development,
     )
