@@ -233,7 +233,8 @@ class display_errors:
         if display_errors.errors_curr == display_errors.errors_prev:
             return
         box_header = layout.box()
-        row = box_header.row()
+        # Don't clip longer names.
+        row = box_header.split(factor=0.9)
         row.label(text="Repository Access Errors:", icon='ERROR')
         rowsub = row.row(align=True)
         rowsub.alignment = 'RIGHT'
@@ -418,9 +419,9 @@ def extensions_panel_draw_impl(
 
             if show_development:
                 if mark:
-                    props = sub.operator("bl_pkg.pkg_mark_clear", text="", icon='RADIOBUT_ON', emboss=False)
+                    props = row.operator("bl_pkg.pkg_mark_clear", text="", icon='RADIOBUT_ON', emboss=False)
                 else:
-                    props = sub.operator("bl_pkg.pkg_mark_set", text="", icon='RADIOBUT_OFF', emboss=False)
+                    props = row.operator("bl_pkg.pkg_mark_set", text="", icon='RADIOBUT_OFF', emboss=False)
                 props.pkg_id = pkg_id
                 props.repo_index = repo_index
                 del props
@@ -612,7 +613,8 @@ def extensions_panel_draw(panel, context):
 
     if repo_status_text.log:
         box = layout.box()
-        row = box.split(factor=0.5, align=True)
+        # Don't clip longer names.
+        row = box.split(factor=0.9, align=True)
         if repo_status_text.running:
             row.label(text=repo_status_text.title + "...", icon='INFO')
         else:

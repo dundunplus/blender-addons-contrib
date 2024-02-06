@@ -695,8 +695,9 @@ class BlPkgRepoSyncAll(Operator, _BlPkgCmdMixIn):
     def exec_command_iter(self, is_modal):
         use_active_only = self.use_active_only
         repos_all = extension_repos_read(use_active_only=use_active_only)
+
         if not repos_all:
-            self.report({'ERROR'}, "No repositories to sync")
+            self.report({'INFO'}, "No repositories to sync")
             return None
 
         for repo_item in repos_all:
@@ -704,7 +705,7 @@ class BlPkgRepoSyncAll(Operator, _BlPkgCmdMixIn):
                 try:
                     os.makedirs(repo_item.directory)
                 except BaseException as ex:
-                    self.report({'ERROR'}, str(ex))
+                    self.report({'WARNING'}, str(ex))
                     return None
 
         cmd_batch = []
@@ -768,9 +769,10 @@ class BlPkgPkgUpgradeAll(Operator, _BlPkgCmdMixIn):
 
         use_active_only = self.use_active_only
         repos_all = extension_repos_read(use_active_only=use_active_only)
+        repo_directory_supset = [repo_entry.directory for repo_entry in repos_all] if use_active_only else None
 
         if not repos_all:
-            self.report({'ERROR'}, "No repositories to upgrade")
+            self.report({'INFO'}, "No repositories to upgrade")
             return None
 
         # Track add-ons to disable before uninstalling.
@@ -781,9 +783,11 @@ class BlPkgPkgUpgradeAll(Operator, _BlPkgCmdMixIn):
 
         pkg_manifest_local_all = list(repo_cache_store.pkg_manifest_from_local_ensure(
             error_fn=self.error_fn_from_exception,
+            directory_subset=repo_directory_supset,
         ))
         for repo_index, pkg_manifest_remote in enumerate(repo_cache_store.pkg_manifest_from_remote_ensure(
             error_fn=self.error_fn_from_exception,
+            directory_subset=repo_directory_supset,
         )):
             if pkg_manifest_remote is None:
                 continue
@@ -821,7 +825,7 @@ class BlPkgPkgUpgradeAll(Operator, _BlPkgCmdMixIn):
             self._repo_directories.add(repo_item.directory)
 
         if not cmd_batch:
-            self.report({'ERROR'}, "No installed packages to update")
+            self.report({'INFO'}, "No installed packages to update")
             return None
 
         # Lock repositories.
