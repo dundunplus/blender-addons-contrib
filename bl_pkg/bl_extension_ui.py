@@ -9,6 +9,8 @@ Written to allow a UI without modifying Blender.
 
 __all__ = (
     "display_errors",
+    "extension_drop_filepath_popover",
+    "extension_drop_url_popover",
     "register",
     "unregister",
 )
@@ -69,6 +71,90 @@ def license_info_to_text(license_list):
         result.append(item)
     return ", ".join(result)
 
+
+def extension_url_find_repo_index_and_pkg_id(url):
+    from .bl_extension_utils import (
+        pkg_manifest_archive_url_abs_from_repo_url,
+    )
+    from .bl_extension_ops import (
+        extension_repos_read,
+    )
+    # return repo_index, pkg_id
+    from . import repo_cache_store
+
+    # NOTE: we might want to use `urllib.parse.urlsplit` so it's possible to include variables in the URL.
+    url_basename = url.rpartition("/")[2]
+
+    repos_all = extension_repos_read()
+
+    for repo_index, (
+            pkg_manifest_remote,
+            pkg_manifest_local,
+    ) in enumerate(zip(
+        repo_cache_store.pkg_manifest_from_remote_ensure(error_fn=print),
+        repo_cache_store.pkg_manifest_from_local_ensure(error_fn=print),
+    )):
+        repo = repos_all[repo_index]
+        repo_url = repo.repo_url
+        if not repo_url:
+            continue
+        for pkg_id, item_remote in pkg_manifest_remote.items():
+            archive_url = item_remote["archive_url"]
+            archive_url_basename = archive_url.rpartition("/")[2]
+            # First compare the filenames, if this matches, check the full URL.
+            if url_basename != archive_url_basename:
+                continue
+
+            # Calculate the absolute URL.
+            archive_url_abs = pkg_manifest_archive_url_abs_from_repo_url(repo_url, archive_url)
+            if archive_url_abs == url:
+                return repo_index, pkg_id, item_remote, pkg_manifest_local.get(pkg_id)
+
+    return -1, "", None, None
+
+
+def extension_drop_url_popover(panel, context, url):
+    layout = panel.layout
+
+    repo_index, pkg_id, item_remote, item_local = extension_url_find_repo_index_and_pkg_id(url)
+
+    if repo_index == -1:
+        layout.label(text="Extension: URL found in remote repositories!", icon='ERROR')
+        layout.label(text=url)
+        return
+
+    if item_local is not None:
+        layout.label(text="Extension: {:s}".format(pkg_id), icon='INFO')
+        layout.label(text="Already installed!")
+        return
+
+    layout.label(
+        text="Extension: {:s} ({:s})".format(
+            pkg_id,
+            size_as_fmt_string(item_remote["archive_size"])
+        ),
+        icon='QUESTION',
+    )
+    props = layout.operator("bl_pkg.pkg_install", text="Install & Enable")
+
+    props.repo_index = repo_index
+    props.pkg_id = pkg_id
+
+
+def extension_drop_filepath_popover(panel, context, url):
+    layout = panel.layout
+
+    # TODO: this UI isn't so nice, ideally the repo can be selected with an OK button.
+    # This is more complicated than it might seem as calling `bpy.ops.*` doesn't forward errors to the window-manager.
+    # The API may need to be extended to better support this use-case.
+    layout.operator_context = 'EXEC_DEFAULT'
+    layout.label(text="Install from Disk")
+    props = layout.operator_menu_enum("bl_pkg.pkg_install_files", "repo", text="Local Repository")
+    props.filepath = url
+
+
+# -----------------------------------------------------------------------------
+# Extensions UI (Legacy)
 
 def extensions_panel_draw_legacy_addons(
         layout,
@@ -210,6 +296,9 @@ def extensions_panel_draw_legacy_addons(
                 if (addon_preferences := used_addon_module_name_map[module_name].preferences) is not None:
                     USERPREF_PT_addons.draw_addon_preferences(layout, context, addon_preferences)
 
+
+# -----------------------------------------------------------------------------
+# Extensions UI
 
 class display_errors:
     """
@@ -544,7 +633,7 @@ class USERPREF_PT_extensions_bl_pkg_filter(Panel):
 
         wm = context.window_manager
         col = layout.column(heading="Show")
-        col.use_property_split=True
+        col.use_property_split = True
         col.prop(wm, "extension_installed_only", text="Installed Extensions")
         sub = col.column()
         sub.active = wm.extension_installed_only
