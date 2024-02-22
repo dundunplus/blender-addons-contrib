@@ -1403,12 +1403,12 @@ class BlPkgPkgUninstall(Operator, _BlPkgCmdMixIn):
 
 
 class BlPkgPkgDisable_TODO(Operator):
-    """NOTE: this operation is not yet supported"""
+    """Turn off this extension"""
     bl_idname = "bl_pkg.extension_disable"
-    bl_label = "Disable the extension"
+    bl_label = "Disable extension"
 
     def execute(self, _context):
-        self.report({'WARNING'}, "Disabling not yet supported")
+        self.report({'WARNING'}, "Disabling themes is not yet supported")
         return {'CANCELLED'}
 
 
@@ -1624,12 +1624,13 @@ class BlPkgRepoUnlock(Operator):
 
 
 class BlPkgEnableNotInstalled(Operator):
-    """Extension needs to be installed before it can be enabled"""
+    """Turn on this extension"""
     bl_idname = "bl_pkg.extensions_enable_not_installed"
     bl_label = "Enable Extension"
 
     @classmethod
     def poll(cls, context):
+        cls.poll_message_set("Extension needs to be installed before it can be enabled")
         return False
 
     def execute(self, context):
