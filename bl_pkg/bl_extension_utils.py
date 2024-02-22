@@ -255,6 +255,7 @@ def repo_sync(
         *,
         directory: str,
         repo_url: str,
+        online_user_agent: str,
         use_idle: bool,
 ) -> Generator[InfoItemSeq, None, None]:
     """
@@ -265,6 +266,7 @@ def repo_sync(
         "sync",
         "--local-dir", directory,
         "--repo-dir", repo_url,
+        "--online-user-agent", online_user_agent,
     ], use_idle=use_idle)
     yield [COMPLETE_ITEM]
 
@@ -273,6 +275,7 @@ def repo_upgrade(
         *,
         directory: str,
         repo_url: str,
+        online_user_agent: str,
         use_idle: bool,
 ) -> Generator[InfoItemSeq, None, None]:
     """
@@ -283,6 +286,7 @@ def repo_upgrade(
         "upgrade",
         "--local-dir", directory,
         "--repo-dir", repo_url,
+        "--online-user-agent", online_user_agent,
     ], use_idle=use_idle)
     yield [COMPLETE_ITEM]
 
@@ -328,6 +332,7 @@ def pkg_install(
         directory: str,
         repo_url: str,
         pkg_id_sequence: Sequence[str],
+        online_user_agent: str,
         use_cache: bool,
         use_idle: bool,
 ) -> Generator[InfoItemSeq, None, None]:
@@ -339,6 +344,7 @@ def pkg_install(
         "install", ",".join(pkg_id_sequence),
         "--local-dir", directory,
         "--repo-dir", repo_url,
+        "--online-user-agent", online_user_agent,
         "--local-cache", str(int(use_cache)),
     ], use_idle=use_idle)
     yield [COMPLETE_ITEM]
@@ -476,6 +482,7 @@ class CommandBatchItem:
         "fn_iter",
         "status",
         "msg_log",
+        "msg_log_len_last",
 
         "msg_type",
         "msg_info",
@@ -490,6 +497,7 @@ class CommandBatchItem:
         self.fn_iter: Optional[Generator[InfoItemSeq, bool, None]] = None
         self.status = CommandBatchItem.STATUS_NOT_YET_STARTED
         self.msg_log: List[Tuple[str, Any]] = []
+        self.msg_log_len_last = 0
         self.msg_type = ""
         self.msg_info = ""
 
@@ -641,6 +649,23 @@ class CommandBatch:
             for cmd in self._batch
             for ty, msg in (cmd.msg_log + ([(cmd.msg_type, cmd.msg_info)] if cmd.msg_type == 'PROGRESS' else []))
         ]
+
+    def calc_status_log_since_last_request_or_none(self) -> Optional[List[List[Tuple[str, str]]]]:
+        """
+        Return a list of new errors per command or None when none are found.
+        """
+        result: List[List[Tuple[str, str]]] = [[] for _ in range(len(self._batch))]
+        found = False
+        for cmd_index, cmd in enumerate(self._batch):
+            msg_log_len = len(cmd.msg_log)
+            if cmd.msg_log_len_last == msg_log_len:
+                continue
+            assert cmd.msg_log_len_last < msg_log_len
+            result[cmd_index] = cmd.msg_log[cmd.msg_log_len_last:]
+            cmd.msg_log_len_last = len(cmd.msg_log)
+            found = True
+
+        return result if found else None
 
 
 # -----------------------------------------------------------------------------

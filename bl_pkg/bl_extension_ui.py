@@ -119,7 +119,7 @@ def extension_drop_url_popover(panel, context, url):
     repo_index, pkg_id, item_remote, item_local = extension_url_find_repo_index_and_pkg_id(url)
 
     if repo_index == -1:
-        layout.label(text="Extension: URL found in remote repositories!", icon='ERROR')
+        layout.label(text="Extension: URL not found in remote repositories!", icon='ERROR')
         layout.label(text=url)
         return
 
@@ -289,7 +289,7 @@ def extensions_panel_draw_legacy_addons(
                 rowsub = col_b.row()
                 rowsub.alignment = 'RIGHT'
                 rowsub.operator(
-                    "preferences.addon_remove", text="Remove", icon='CANCEL',
+                    "preferences.addon_remove", text="Uninstall", icon='CANCEL',
                 ).module = module_name
 
             if is_enabled:
@@ -403,12 +403,21 @@ def extensions_panel_draw_impl(
         # or cause a trace-back which breaks the UI.
         if (remote_ex is not None) or (local_ex is not None):
             repo = repos_all[repo_index]
+            # NOTE: `FileNotFoundError` occurs when a repository has been added but has not update with its remote.
+            # We may want a way for users to know a repository is missing from the view and they need to run update
+            # to access its extensions.
             if remote_ex is not None:
-                errors_on_draw.append("Remote of \"{:s}\": {:s}".format(repo.name, str(remote_ex)))
+                if isinstance(remote_ex, FileNotFoundError) and (remote_ex.filename == repo.directory):
+                    pass
+                else:
+                    errors_on_draw.append("Remote of \"{:s}\": {:s}".format(repo.name, str(remote_ex)))
                 remote_ex = None
 
             if local_ex is not None:
-                errors_on_draw.append("Local of \"{:s}\": {:s}".format(repo.name, str(remote_ex)))
+                if isinstance(local_ex, FileNotFoundError) and (local_ex.filename == repo.directory):
+                    pass
+                else:
+                    errors_on_draw.append("Local of \"{:s}\": {:s}".format(repo.name, str(local_ex)))
                 local_ex = None
             continue
 
@@ -592,10 +601,10 @@ def extensions_panel_draw_impl(
 
                 # Note that we could allow removing extensions from non-remote extension repos
                 # although this is destructive, so don't enable this right now.
-                if is_installed and has_remote:
+                if is_installed:
                     rowsub = col_b.row()
                     rowsub.alignment = 'RIGHT'
-                    props = rowsub.operator("bl_pkg.pkg_uninstall", text="Remove")
+                    props = rowsub.operator("bl_pkg.pkg_uninstall", text="Uninstall")
                     props.repo_index = repo_index
                     props.pkg_id = pkg_id
                     del props, rowsub
@@ -662,6 +671,8 @@ class USERPREF_MT_extensions_bl_pkg_settings(Menu):
         layout.prop(addon_prefs, "show_development")
 
         if addon_prefs.show_development:
+            layout.prop(addon_prefs, "show_development_reports")
+
             layout.separator()
 
             # We might want to expose this for all users, the purpose of this
@@ -691,6 +702,11 @@ def extensions_panel_draw(panel, context):
         blender_filter_by_type_map,
     )
 
+    addon_prefs = prefs.addons[__package__].preferences
+
+    show_development = addon_prefs.show_development
+    show_development_reports = show_development and addon_prefs.show_development_reports
+
     wm = context.window_manager
     layout = panel.layout
 
@@ -706,7 +722,18 @@ def extensions_panel_draw(panel, context):
     row_b.popover("USERPREF_PT_extensions_repos", text="", icon='PREFERENCES')
     del row, row_a, row_b
 
-    if repo_status_text.log:
+    if show_development_reports:
+        show_status = bool(repo_status_text.log)
+    else:
+        # Only show if running and there is progress to display.
+        show_status = bool(repo_status_text.log) and repo_status_text.running
+        if show_status:
+            show_status = False
+            for ty, msg in repo_status_text.log:
+                if ty == 'PROGRESS':
+                    show_status = True
+
+    if show_status:
         box = layout.box()
         # Don't clip longer names.
         row = box.split(factor=0.9, align=True)
@@ -714,9 +741,10 @@ def extensions_panel_draw(panel, context):
             row.label(text=repo_status_text.title + "...", icon='INFO')
         else:
             row.label(text=repo_status_text.title, icon='INFO')
-        rowsub = row.row(align=True)
-        rowsub.alignment = 'RIGHT'
-        rowsub.operator("bl_pkg.pkg_status_clear", text="", icon='X', emboss=False)
+        if show_development_reports:
+            rowsub = row.row(align=True)
+            rowsub.alignment = 'RIGHT'
+            rowsub.operator("bl_pkg.pkg_status_clear", text="", icon='X', emboss=False)
         boxsub = box.box()
         for ty, msg in repo_status_text.log:
             if ty == 'STATUS':
@@ -743,8 +771,6 @@ def extensions_panel_draw(panel, context):
         if repo_status_text.running:
             return
 
-    addon_prefs = prefs.addons[__package__].preferences
-
     extensions_panel_draw_impl(
         panel,
         context,
@@ -753,7 +779,7 @@ def extensions_panel_draw(panel, context):
         wm.extension_enabled_only,
         wm.extension_installed_only,
         wm.extension_show_legacy_addons,
-        addon_prefs.show_development,
+        show_development,
     )
 
 

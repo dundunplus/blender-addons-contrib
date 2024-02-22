@@ -5,14 +5,6 @@
 """
 Blender, thin wrapper around ``blender_extension_utils``.
 Where the operator shows progress, any errors and supports canceling operations.
-
- /src/blender/blender.bin --factory-startup --python ./blender/bl_extension_ops.py
-
-bpy.ops.bl_pkg.demo('INVOKE_DEFAULT')
-
-/src/blender/blender.bin \
-    --factory-startup --python ./blender/bl_extension_ops.py -b \
-    --python-expr "__import__('bpy').ops.bl_pkg.demo()"
 """
 
 __all__ = (
@@ -133,6 +125,18 @@ class CheckSIGINT_Context:
 # -----------------------------------------------------------------------------
 # Internal Utilities
 #
+
+def online_user_agent_from_blender():
+    # NOTE: keep this brief and avoid `platform.platform()` which could identify individual users.
+    # Produces something like this: `Blender/4.2.0 (Linux x86_64; cycle=alpha)` or similar.
+    import platform
+    return "Blender/{:d}.{:d}.{:d} ({:s} {:s}; cycle={:s})".format(
+        *bpy.app.version,
+        platform.system(),
+        platform.machine(),
+        bpy.app.version_cycle,
+    )
+
 
 def lock_result_any_failed_with_report(op, lock_result, report_type='ERROR'):
     """
@@ -491,6 +495,21 @@ class CommandHandle:
             repo_status_text.running = False
             return {'FINISHED'}
 
+        # Forward new messages to reports.
+        msg_list_per_command = self.cmd_batch.calc_status_log_since_last_request_or_none()
+        if msg_list_per_command is not None:
+            for i, msg_list in enumerate(msg_list_per_command, 1):
+                for (ty, msg) in msg_list:
+                    if len(msg_list_per_command) > 1:
+                        # These reports are flattened, note the process number that fails so
+                        # whoever is reading the reports can make sense of the messages.
+                        msg = "{:s} (process {:d} of {:d})".format(msg, i, len(msg_list_per_command))
+                    if ty == 'STATUS':
+                        op.report({'INFO'}, msg)
+                    else:
+                        op.report({'WARNING'}, msg)
+        del msg_list_per_command
+
         # Avoid high CPU usage by only redrawing when there has been a change.
         msg_list = self.cmd_batch.calc_status_log_or_none()
         if msg_list is not None:
@@ -658,6 +677,7 @@ class BlPkgRepoSync(Operator, _BlPkgCmdMixIn):
                     bl_extension_utils.repo_sync,
                     directory=directory,
                     repo_url=repo_item.repo_url,
+                    online_user_agent=online_user_agent_from_blender(),
                     use_idle=is_modal,
                 )
             )
@@ -670,16 +690,17 @@ class BlPkgRepoSync(Operator, _BlPkgCmdMixIn):
     def exec_command_finish(self):
         from . import repo_cache_store
 
-        # Unlock repositories.
-        lock_result_any_failed_with_report(self, self.repo_lock.release(), report_type='WARNING')
-        del self.repo_lock
-
         repo_cache_store_refresh_from_prefs()
         repo_cache_store.refresh_remote_from_directory(
             directory=self.repo_directory,
             error_fn=self.error_fn_from_exception,
             force=True,
         )
+
+        # Unlock repositories.
+        lock_result_any_failed_with_report(self, self.repo_lock.release(), report_type='WARNING')
+        del self.repo_lock
+
         _preferences_ui_redraw()
 
 
@@ -717,6 +738,7 @@ class BlPkgRepoSyncAll(Operator, _BlPkgCmdMixIn):
                     bl_extension_utils.repo_sync,
                     directory=repo_item.directory,
                     repo_url=repo_item.repo_url,
+                    online_user_agent=online_user_agent_from_blender(),
                     use_idle=is_modal,
                 ))
 
@@ -735,10 +757,6 @@ class BlPkgRepoSyncAll(Operator, _BlPkgCmdMixIn):
     def exec_command_finish(self):
         from . import repo_cache_store
 
-        # Unlock repositories.
-        lock_result_any_failed_with_report(self, self.repo_lock.release(), report_type='WARNING')
-        del self.repo_lock
-
         repo_cache_store_refresh_from_prefs()
 
         for repo_item in extension_repos_read():
@@ -747,6 +765,10 @@ class BlPkgRepoSyncAll(Operator, _BlPkgCmdMixIn):
                 error_fn=self.error_fn_from_exception,
                 force=True,
             )
+
+        # Unlock repositories.
+        lock_result_any_failed_with_report(self, self.repo_lock.release(), report_type='WARNING')
+        del self.repo_lock
 
         _preferences_ui_redraw()
 
@@ -820,6 +842,7 @@ class BlPkgPkgUpgradeAll(Operator, _BlPkgCmdMixIn):
                 directory=repo_item.directory,
                 repo_url=repo_item.repo_url,
                 pkg_id_sequence=pkg_id_sequence,
+                online_user_agent=online_user_agent_from_blender(),
                 use_cache=repo_item.use_cache,
                 use_idle=is_modal,
             ))
@@ -911,6 +934,7 @@ class BlPkgPkgInstallMarked(Operator, _BlPkgCmdMixIn):
                 directory=repo_item.directory,
                 repo_url=repo_item.repo_url,
                 pkg_id_sequence=pkg_id_sequence,
+                online_user_agent=online_user_agent_from_blender(),
                 use_cache=repo_item.use_cache,
                 use_idle=is_modal,
             ))
@@ -1165,10 +1189,6 @@ class BlPkgPkgInstallFiles(Operator, _BlPkgCmdMixIn):
 
     def exec_command_finish(self):
 
-        # Unlock repositories.
-        lock_result_any_failed_with_report(self, self.repo_lock.release(), report_type='WARNING')
-        del self.repo_lock
-
         # Refresh installed packages for repositories that were operated on.
         from . import repo_cache_store
 
@@ -1178,6 +1198,11 @@ class BlPkgPkgInstallFiles(Operator, _BlPkgCmdMixIn):
             error_fn=self.error_fn_from_exception,
             force=True,
         )
+
+        # Unlock repositories.
+        lock_result_any_failed_with_report(self, self.repo_lock.release(), report_type='WARNING')
+        del self.repo_lock
+
         repo_cache_store.refresh_local_from_directory(
             directory=self.repo_directory,
             error_fn=self.error_fn_from_exception,
@@ -1294,6 +1319,7 @@ class BlPkgPkgInstall(Operator, _BlPkgCmdMixIn):
                     directory=directory,
                     repo_url=repo_item.repo_url,
                     pkg_id_sequence=(pkg_id,),
+                    online_user_agent=online_user_agent_from_blender(),
                     use_cache=repo_item.use_cache,
                     use_idle=is_modal,
                 )
@@ -1387,12 +1413,25 @@ class BlPkgPkgUninstall(Operator, _BlPkgCmdMixIn):
 
     def exec_command_finish(self):
 
+        # Refresh installed packages for repositories that were operated on.
+        from . import repo_cache_store
+
+        repo_item = _extensions_repo_from_directory(self.repo_directory)
+        if repo_item.repo_url == "":
+            # Re-generate JSON meta-data from TOML files (needed for offline repository).
+            # NOTE: This could be slow with many local extensions,
+            # we could simply remove the package that was uninstalled.
+            repo_cache_store.refresh_remote_from_directory(
+                directory=self.repo_directory,
+                error_fn=self.error_fn_from_exception,
+                force=True,
+            )
+        del repo_item
+
         # Unlock repositories.
         lock_result_any_failed_with_report(self, self.repo_lock.release(), report_type='WARNING')
         del self.repo_lock
 
-        # Refresh installed packages for repositories that were operated on.
-        from . import repo_cache_store
         repo_cache_store.refresh_local_from_directory(
             directory=self.repo_directory,
             error_fn=self.error_fn_from_exception,
