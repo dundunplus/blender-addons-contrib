@@ -1502,7 +1502,16 @@ class subcmd_client:
         # Remove `filepath_local_pkg_temp` if this block exits.
         directories_to_clean: List[str] = []
         with CleanupPathsContext(files=(), directories=directories_to_clean):
-            with zipfile.ZipFile(filepath_archive, mode="r") as zip_fh:
+            try:
+                zip_fh_context = zipfile.ZipFile(filepath_archive, mode="r")
+            except BaseException as ex:
+                message_warn(
+                    msg_fn,
+                    "Error extracting archive: {:s}".format(str(ex)),
+                )
+                return False
+
+            with contextlib.closing(zip_fh_context) as zip_fh:
                 archive_subdir = pkg_zipfile_detect_subdir_or_none(zip_fh)
                 if archive_subdir is None:
                     message_warn(
@@ -1922,7 +1931,13 @@ class subcmd_author:
             return False
 
         with CleanupPathsContext(files=(outfile_temp,), directories=()):
-            with zipfile.ZipFile(outfile_temp, 'w', zipfile.ZIP_LZMA) as zip_fh:
+            try:
+                zip_fh_context = zipfile.ZipFile(outfile_temp, 'w', zipfile.ZIP_LZMA)
+            except BaseException as ex:
+                message_status(msg_fn, "Error creating archive \"{:s}\"".format(str(ex)))
+                return False
+
+            with contextlib.closing(zip_fh_context) as zip_fh:
                 for filepath_abs, filepath_rel in scandir_recursive(
                         pkg_source_dir,
                         # Be more advanced in the future, for now ignore dot-files (`.git`) .. etc.
@@ -1933,7 +1948,11 @@ class subcmd_author:
 
                     # Handy for testing that sub-directories:
                     # zip_fh.write(filepath_abs, manifest.id + "/" + filepath_rel)
-                    zip_fh.write(filepath_abs, filepath_rel)
+                    try:
+                        zip_fh.write(filepath_abs, filepath_rel)
+                    except BaseException as ex:
+                        message_status(msg_fn, "Error adding to archive \"{:s}\"".format(str(ex)))
+                        return False
 
                 request_exit |= message_status(msg_fn, "complete")
                 if request_exit:
