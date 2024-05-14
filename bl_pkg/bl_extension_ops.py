@@ -801,15 +801,9 @@ class CommandHandle:
         return {'RUNNING_MODAL'}
 
     def op_modal_step(self, op, context):
-        command_info = self.cmd_batch.exec_non_blocking(
+        command_result = self.cmd_batch.exec_non_blocking(
             request_exit=self.request_exit,
         )
-        if command_info is None:
-            self.wm.event_timer_remove(self.modal_timer)
-            del op._runtime_handle
-            context.workspace.status_text_set(None)
-            repo_status_text.running = False
-            return {'FINISHED'}
 
         # Forward new messages to reports.
         msg_list_per_command = self.cmd_batch.calc_status_log_since_last_request_or_none()
@@ -840,6 +834,13 @@ class CommandHandle:
             repo_status_text.log = msg_list
             repo_status_text.running = True
             _preferences_ui_redraw()
+
+        if command_result.all_complete:
+            self.wm.event_timer_remove(self.modal_timer)
+            del op._runtime_handle
+            context.workspace.status_text_set(None)
+            repo_status_text.running = False
+            return {'FINISHED'}
 
         return {'RUNNING_MODAL'}
 
@@ -2197,6 +2198,24 @@ class BlPkgRepoUnlock(Operator):
         return {'FINISHED'}
 
 
+# NOTE: this is a modified version of `PREFERENCES_OT_addon_show`.
+# It would make most sense to extend this operator to support showing extensions to upgrade (eventually).
+class BlPkgShowUpgrade(Operator):
+    """Show add-on preferences"""
+    bl_idname = "bl_pkg.extensions_show_for_update"
+    bl_label = ""
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context):
+
+        # TODO: support filtering only extensions to upgrade.
+        context.preferences.active_section = 'ADDONS'
+        context.preferences.view.show_addons_enabled_only = False
+        bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
+
+        return {'FINISHED'}
+
+
 class BlPkgEnableNotInstalled(Operator):
     """Turn on this extension"""
     bl_idname = "bl_pkg.extensions_enable_not_installed"
@@ -2244,6 +2263,8 @@ classes = (
     BlPkgObsoleteMarked,
     BlPkgRepoLock,
     BlPkgRepoUnlock,
+
+    BlPkgShowUpgrade,
 
     # Dummy, just shows a message.
     BlPkgEnableNotInstalled,
