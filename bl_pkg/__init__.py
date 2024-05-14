@@ -105,12 +105,12 @@ def cookie_from_session():
 def repo_paths_or_none(repo_item):
     if (directory := repo_item.directory) == "":
         return None, None
-    if repo_item.use_remote_path:
-        if not (remote_path := repo_item.remote_path):
+    if repo_item.use_remote_url:
+        if not (remote_url := repo_item.remote_url):
             return None, None
     else:
-        remote_path = ""
-    return directory, remote_path
+        remote_url = ""
+    return directory, remote_url
 
 
 def repo_active_or_none():
@@ -118,10 +118,10 @@ def repo_active_or_none():
     if not prefs.experimental.use_extension_repos:
         return
 
-    paths = prefs.filepaths
-    active_extension_index = paths.active_extension_repo
+    extensions = prefs.extensions
+    active_extension_index = extensions.active_repo
     try:
-        active_repo = None if active_extension_index < 0 else paths.extension_repos[active_extension_index]
+        active_repo = None if active_extension_index < 0 else extensions.repos[active_extension_index]
     except IndexError:
         active_repo = None
     return active_repo
@@ -148,16 +148,16 @@ def repos_to_notify():
 
         prefs = bpy.context.preferences
         if prefs.experimental.use_extension_repos:
-            extension_repos = bpy.context.preferences.filepaths.extension_repos
+            extension_repos = prefs.extensions.repos
             for repo_item in extension_repos:
                 if not repo_item.enabled:
                     continue
                 if not repo_item.use_sync_on_startup:
                     continue
-                if not repo_item.use_remote_path:
+                if not repo_item.use_remote_url:
                     continue
                 # Invalid, if there is no remote path this can't update.
-                if not repo_item.remote_path:
+                if not repo_item.remote_url:
                     continue
                 repos_notify.append(repo_item)
     return repos_notify
@@ -249,7 +249,7 @@ _monkeypatch_extenions_repos_update_dirs = set()
 def monkeypatch_extenions_repos_update_pre_impl():
     _monkeypatch_extenions_repos_update_dirs.clear()
 
-    extension_repos = bpy.context.preferences.filepaths.extension_repos
+    extension_repos = bpy.context.preferences.extensions.repos
     for repo_item in extension_repos:
         if not repo_item.enabled:
             continue
@@ -267,7 +267,7 @@ def monkeypatch_extenions_repos_update_post_impl():
     bl_extension_ops.repo_cache_store_refresh_from_prefs()
 
     # Refresh newly added directories.
-    extension_repos = bpy.context.preferences.filepaths.extension_repos
+    extension_repos = bpy.context.preferences.extensions.repos
     for repo_item in extension_repos:
         if not repo_item.enabled:
             continue
@@ -370,7 +370,7 @@ def theme_preset_draw(menu, context):
     )
     layout = menu.layout
     repos_all = [
-        repo_item for repo_item in context.preferences.filepaths.extension_repos
+        repo_item for repo_item in context.preferences.extensions.repos
         if repo_item.enabled
     ]
     if not repos_all:
@@ -450,6 +450,10 @@ def register():
     WindowManager.extension_enabled_only = BoolProperty(
         name="Show Enabled Extensions",
         description="Only show enabled extensions",
+    )
+    WindowManager.extension_updates_only = BoolProperty(
+        name="Show Updates Available",
+        description="Only show extensions with updates available",
     )
     WindowManager.extension_installed_only = BoolProperty(
         name="Show Installed Extensions",

@@ -245,15 +245,15 @@ def extension_theme_enable(repo_directory, pkg_idname):
 
 def repo_iter_valid_local_only(context):
     from . import repo_paths_or_none
-    extension_repos = context.preferences.filepaths.extension_repos
+    extension_repos = context.preferences.extensions.repos
     for repo_item in extension_repos:
         if not repo_item.enabled:
             continue
         # Ignore repositories that have invalid settings.
-        directory, remote_path = repo_paths_or_none(repo_item)
+        directory, remote_url = repo_paths_or_none(repo_item)
         if directory is None:
             continue
-        if remote_path:
+        if remote_url:
             continue
         yield repo_item
 
@@ -269,16 +269,16 @@ class RepoItem(NamedTuple):
 def repo_cache_store_refresh_from_prefs(include_disabled=False):
     from . import repo_cache_store
     from . import repo_paths_or_none
-    extension_repos = bpy.context.preferences.filepaths.extension_repos
+    extension_repos = bpy.context.preferences.extensions.repos
     repos = []
     for repo_item in extension_repos:
         if not include_disabled:
             if not repo_item.enabled:
                 continue
-        directory, remote_path = repo_paths_or_none(repo_item)
+        directory, remote_url = repo_paths_or_none(repo_item)
         if directory is None:
             continue
-        repos.append((directory, remote_path))
+        repos.append((directory, remote_url))
 
     repo_cache_store.refresh_from_repos(repos=repos)
 
@@ -466,13 +466,13 @@ def _preferences_ensure_sync():
 
 def extension_repos_read_index(index, *, include_disabled=False):
     from . import repo_paths_or_none
-    extension_repos = bpy.context.preferences.filepaths.extension_repos
+    extension_repos = bpy.context.preferences.extensions.repos
     index_test = 0
     for repo_item in extension_repos:
         if not include_disabled:
             if not repo_item.enabled:
                 continue
-        directory, remote_path = repo_paths_or_none(repo_item)
+        directory, remote_url = repo_paths_or_none(repo_item)
         if directory is None:
             continue
 
@@ -480,7 +480,7 @@ def extension_repos_read_index(index, *, include_disabled=False):
             return RepoItem(
                 name=repo_item.name,
                 directory=directory,
-                repo_url=remote_path,
+                repo_url=remote_url,
                 module=repo_item.module,
                 use_cache=repo_item.use_cache,
             )
@@ -490,13 +490,13 @@ def extension_repos_read_index(index, *, include_disabled=False):
 
 def extension_repos_read(*, include_disabled=False, use_active_only=False):
     from . import repo_paths_or_none
-    paths = bpy.context.preferences.filepaths
-    extension_repos = paths.extension_repos
+    extensions = bpy.context.preferences.extensions
+    extension_repos = extensions.repos
     result = []
 
     if use_active_only:
         try:
-            extension_active = extension_repos[paths.active_extension_repo]
+            extension_active = extension_repos[extensions.active_repo]
         except IndexError:
             return result
 
@@ -509,14 +509,14 @@ def extension_repos_read(*, include_disabled=False, use_active_only=False):
                 continue
 
         # Ignore repositories that have invalid settings.
-        directory, remote_path = repo_paths_or_none(repo_item)
+        directory, remote_url = repo_paths_or_none(repo_item)
         if directory is None:
             continue
 
         result.append(RepoItem(
             name=repo_item.name,
             directory=directory,
-            repo_url=remote_path,
+            repo_url=remote_url,
             module=repo_item.module,
             use_cache=repo_item.use_cache,
         ))
@@ -2207,11 +2207,51 @@ class BlPkgShowUpgrade(Operator):
     bl_options = {'INTERNAL'}
 
     def execute(self, context):
+        wm = context.window_manager
+        prefs = context.preferences
 
-        # TODO: support filtering only extensions to upgrade.
-        context.preferences.active_section = 'ADDONS'
-        context.preferences.view.show_addons_enabled_only = False
+        prefs.active_section = 'ADDONS'
+        prefs.view.show_addons_enabled_only = False
+
+        # Show only extensions that will be updated.
+        wm.extension_installed_only = False
+        wm.extension_updates_only = True
+
         bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
+
+        return {'FINISHED'}
+
+
+class BlPkgOnlineAccess(Operator):
+    """Handle online access"""
+    bl_idname = "bl_pkg.extension_online_access"
+    bl_label = ""
+    bl_options = {'INTERNAL'}
+
+    enable: BoolProperty(
+        name="Enable",
+        default=False,
+    )
+
+    def execute(self, context):
+        prefs = context.preferences
+
+        remote_url = "https://extensions.blender.org/api/v1/extensions"
+
+        if self.enable:
+            extension_repos = prefs.extensions.repos
+            repo_found = None
+            for repo in extension_repos:
+                if repo.remote_url == remote_url:
+                    repo_found = repo
+                    break
+            if repo_found:
+                repo_found.enabled = True
+            else:
+                # While not expected, we want to know if this ever occurs, don't fail silently.
+                self.report({'WARNING'}, "Repository \"{:s}\" not found!".format(remote_url))
+
+        prefs.extensions.use_online_access_handled = True
 
         return {'FINISHED'}
 
@@ -2265,6 +2305,7 @@ classes = (
     BlPkgRepoUnlock,
 
     BlPkgShowUpgrade,
+    BlPkgOnlineAccess,
 
     # Dummy, just shows a message.
     BlPkgEnableNotInstalled,
