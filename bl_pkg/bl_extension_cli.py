@@ -355,6 +355,10 @@ class subcmd_pkg:
             no_prefs: bool,
     ) -> bool:
         import bpy
+
+        # Blender's operator requires an absolute path.
+        filepath = os.path.abspath(filepath)
+
         try:
             bpy.ops.bl_pkg.pkg_install_files(
                 filepath=filepath,
@@ -390,7 +394,7 @@ class subcmd_repo:
             print("{:s}:".format(repo.module))
             print("    name: \"{:s}\"".format(repo.name))
             print("    directory: \"{:s}\"".format(repo.directory))
-            if url := repo.repo_url:
+            if url := repo.remote_url:
                 print("    url: \"{:s}\"".format(url))
 
         return True

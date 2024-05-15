@@ -34,7 +34,7 @@ __all__ = (
 
     "pkg_manifest_dict_is_valid_or_error",
     "pkg_manifest_dict_from_file_or_error",
-    "pkg_manifest_archive_url_abs_from_repo_url",
+    "pkg_manifest_archive_url_abs_from_remote_url",
 
     "CommandBatch",
     "RepoCacheStore",
@@ -284,10 +284,11 @@ def pkg_theme_file_list(directory: str, pkg_idname: str) -> Tuple[str, List[str]
 def repo_sync(
         *,
         directory: str,
-        repo_url: str,
+        remote_url: str,
         online_user_agent: str,
         use_idle: bool,
         force_exit_ok: bool = False,
+        extension_override: str = "",
 ) -> Generator[InfoItemSeq, None, None]:
     """
     Implementation:
@@ -296,9 +297,10 @@ def repo_sync(
     yield from command_output_from_json_0([
         "sync",
         "--local-dir", directory,
-        "--repo-dir", repo_url,
+        "--remote-url", remote_url,
         "--online-user-agent", online_user_agent,
         *(("--force-exit-ok",) if force_exit_ok else ()),
+        *(("--extension-override", extension_override) if extension_override else ()),
     ], use_idle=use_idle)
     yield [COMPLETE_ITEM]
 
@@ -306,7 +308,7 @@ def repo_sync(
 def repo_upgrade(
         *,
         directory: str,
-        repo_url: str,
+        remote_url: str,
         online_user_agent: str,
         use_idle: bool,
 ) -> Generator[InfoItemSeq, None, None]:
@@ -317,7 +319,7 @@ def repo_upgrade(
     yield from command_output_from_json_0([
         "upgrade",
         "--local-dir", directory,
-        "--repo-dir", repo_url,
+        "--remote-url", remote_url,
         "--online-user-agent", online_user_agent,
     ], use_idle=use_idle)
     yield [COMPLETE_ITEM]
@@ -362,7 +364,7 @@ def pkg_install_files(
 def pkg_install(
         *,
         directory: str,
-        repo_url: str,
+        remote_url: str,
         pkg_id_sequence: Sequence[str],
         online_user_agent: str,
         use_cache: bool,
@@ -375,7 +377,7 @@ def pkg_install(
     yield from command_output_from_json_0([
         "install", ",".join(pkg_id_sequence),
         "--local-dir", directory,
-        "--repo-dir", repo_url,
+        "--remote-url", remote_url,
         "--online-user-agent", online_user_agent,
         "--local-cache", str(int(use_cache)),
     ], use_idle=use_idle)
@@ -458,12 +460,13 @@ def pkg_make_obsolete_for_testing(local_dir: str, pkg_id: str) -> None:
 def pkg_manifest_dict_is_valid_or_error(
         data: Dict[str, Any],
         from_repo: bool,
+        strict: bool,
 ) -> Optional[str]:
     # Exception! In in general `cli` shouldn't be considered a Python module,
     # it's validation function is handy to reuse.
     from .cli.blender_ext import pkg_manifest_from_dict_and_validate
     assert "id" in data
-    result = pkg_manifest_from_dict_and_validate(data, from_repo=from_repo)
+    result = pkg_manifest_from_dict_and_validate(data, from_repo=from_repo, strict=strict)
     if isinstance(result, str):
         return result
     return None
@@ -482,21 +485,21 @@ def pkg_manifest_dict_from_file_or_error(
     return result_dict
 
 
-def pkg_manifest_archive_url_abs_from_repo_url(repo_url: str, archive_url: str) -> str:
+def pkg_manifest_archive_url_abs_from_remote_url(remote_url: str, archive_url: str) -> str:
     if archive_url.startswith("./"):
         if (
-                len(repo_url) > len(PKG_REPO_LIST_FILENAME) and
-                repo_url.endswith(PKG_REPO_LIST_FILENAME) and
-                (repo_url[-(len(PKG_REPO_LIST_FILENAME) + 1)] in {"\\", "/"})
+                len(remote_url) > len(PKG_REPO_LIST_FILENAME) and
+                remote_url.endswith(PKG_REPO_LIST_FILENAME) and
+                (remote_url[-(len(PKG_REPO_LIST_FILENAME) + 1)] in {"\\", "/"})
         ):
             # The URL contains the JSON name, strip this off before adding the package name.
-            archive_url = repo_url[:-len(PKG_REPO_LIST_FILENAME)] + archive_url[2:]
-        elif repo_url.startswith(("http://", "https://", "file://")):
+            archive_url = remote_url[:-len(PKG_REPO_LIST_FILENAME)] + archive_url[2:]
+        elif remote_url.startswith(("http://", "https://", "file://")):
             # Simply add to the URL.
-            archive_url = repo_url.rstrip("/") + archive_url[1:]
+            archive_url = remote_url.rstrip("/") + archive_url[1:]
         else:
             # Handle as a regular path.
-            archive_url = os.path.join(repo_url, archive_url[2:])
+            archive_url = os.path.join(remote_url, archive_url[2:])
     return archive_url
 
 
@@ -761,7 +764,7 @@ class CommandBatch:
             if update_count > 0:
                 # NOTE: the UI design in #120612 has the number of extensions available in icon.
                 # Include in the text as this is not yet supported.
-                return "Extensions Updates Available ({:d}){:s}".format(update_count, fail_text), 'URL'
+                return "Extensions Updates Available ({:d}){:s}".format(update_count, fail_text), 'INTERNET'
             return "All Extensions Up-to-date{:s}".format(fail_text), 'CHECKMARK'
         if status_data.flag & 1 << CommandBatchItem.STATUS_RUNNING:
             return "Checking for Extension Updates{:s}".format(fail_text), 'SORTTIME'
@@ -808,7 +811,7 @@ class CommandBatch:
 class _RepoCacheEntry:
     __slots__ = (
         "directory",
-        "repo_url",
+        "remote_url",
 
         "_pkg_manifest_local",
         "_pkg_manifest_remote",
@@ -816,10 +819,10 @@ class _RepoCacheEntry:
         "_pkg_manifest_remote_has_warning"
     )
 
-    def __init__(self, directory: str, repo_url: str) -> None:
+    def __init__(self, directory: str, remote_url: str) -> None:
         assert directory != ""
         self.directory = directory
-        self.repo_url = repo_url
+        self.remote_url = remote_url
         # Manifest data per package loaded from the packages local JSON.
         self._pkg_manifest_local: Optional[Dict[str, Dict[str, Any]]] = None
         self._pkg_manifest_remote: Optional[Dict[str, Dict[str, Any]]] = None
@@ -858,7 +861,7 @@ class _RepoCacheEntry:
             if not ignore_missing:
                 # NOTE: this warning will occur when setting up a new repository.
                 # It could be removed but it's also useful to know when the JSON is missing.
-                if self.repo_url:
+                if self.remote_url:
                     if not self._pkg_manifest_remote_has_warning:
                         print("Repository file:", filepath_json, "not found, sync required!")
                         self._pkg_manifest_remote_has_warning = True
@@ -871,7 +874,7 @@ class _RepoCacheEntry:
             error_fn: Callable[[BaseException], None],
             force: bool = False,
     ) -> None:
-        assert self.repo_url == ""
+        assert self.remote_url == ""
         # Since there is no remote repo the ID name is defined by the directory name only.
         local_json_data = self.pkg_manifest_from_local_ensure(error_fn=error_fn)
         if local_json_data is None:
@@ -923,7 +926,7 @@ class _RepoCacheEntry:
         # Detect a local-only repository, there is no server to sync with
         # so generate the JSON from the TOML files.
         # While redundant this avoids having support multiple code-paths for local-only/remote repos.
-        if self.repo_url == "":
+        if self.remote_url == "":
             self._json_data_refresh_from_toml(error_fn=error_fn, force=force)
 
         filepath_json = os.path.join(self.directory, REPO_LOCAL_JSON)
@@ -952,7 +955,7 @@ class _RepoCacheEntry:
             ignore_missing: bool = False,
     ) -> Optional[Dict[str, Dict[str, Any]]]:
         # Important for local-only repositories (where the directory name defines the ID).
-        has_remote = self.repo_url != ""
+        has_remote = self.remote_url != ""
 
         if self._pkg_manifest_local is None:
             self._json_data_ensure(
@@ -1007,7 +1010,7 @@ class _RepoCacheEntry:
                     pkg_idname = filename
 
                 # Validate so local-only packages with invalid manifests aren't used.
-                if (error_str := pkg_manifest_dict_is_valid_or_error(item_local, from_repo=False)):
+                if (error_str := pkg_manifest_dict_is_valid_or_error(item_local, from_repo=False, strict=False)):
                     error_fn(Exception(error_str))
                     continue
 
@@ -1056,13 +1059,13 @@ class RepoCacheStore:
         repos_prev = {}
         if not force:
             for repo_entry in self._repos:
-                repos_prev[repo_entry.directory, repo_entry.repo_url] = repo_entry
+                repos_prev[repo_entry.directory, repo_entry.remote_url] = repo_entry
         self._repos.clear()
 
-        for directory, repo_url in repos:
-            repo_entry_test = repos_prev.get((directory, repo_url))
+        for directory, remote_url in repos:
+            repo_entry_test = repos_prev.get((directory, remote_url))
             if repo_entry_test is None:
-                repo_entry_test = _RepoCacheEntry(directory, repo_url)
+                repo_entry_test = _RepoCacheEntry(directory, remote_url)
             self._repos.append(repo_entry_test)
         self._is_init = True
 

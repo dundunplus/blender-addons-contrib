@@ -80,7 +80,7 @@ PKG_MANIFEST_FILENAME_TOML = "blender_manifest.toml"
 # This directory is in the local repository.
 REPO_LOCAL_PRIVATE_DIR = ".blender_ext"
 
-MESSAGE_TYPES = {'STATUS', 'PROGRESS', 'WARN', 'ERROR', 'DONE'}
+MESSAGE_TYPES = {'STATUS', 'PROGRESS', 'WARN', 'ERROR', 'PATH', 'DONE'}
 
 RE_MANIFEST_SEMVER = re.compile(
     r'^'
@@ -90,6 +90,9 @@ RE_MANIFEST_SEMVER = re.compile(
     r'(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?'
     r'(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$'
 )
+
+# Ensure names (for example), don't contain control characters.
+RE_CONTROL_CHARS = re.compile(r'[\x00-\x1f\x7f-\x9f]')
 
 # Progress updates are displayed after each chunk of this size is downloaded.
 # Small values add unnecessary overhead showing progress, large values will make
@@ -150,6 +153,13 @@ def message_status(msg_fn: MessageFn, s: str) -> bool:
     Print a status message.
     """
     return msg_fn("STATUS", s)
+
+
+def message_path(msg_fn: MessageFn, s: str) -> bool:
+    """
+    Print a path.
+    """
+    return msg_fn("PATH", s)
 
 
 def message_progress(msg_fn: MessageFn, s: str, progress: int, progress_range: int, unit: str) -> bool:
@@ -351,14 +361,15 @@ def pkg_manifest_from_dict_and_validate_impl(
         *,
         from_repo: bool,
         all_errors: bool,
+        strict: bool,
 ) -> Union[PkgManifest, List[str]]:
     error_list = []
     # Validate the dictionary.
     if all_errors:
-        if (x := pkg_manifest_is_valid_or_error_all(data, from_repo=from_repo)) is not None:
+        if (x := pkg_manifest_is_valid_or_error_all(data, from_repo=from_repo, strict=strict)) is not None:
             error_list.extend(x)
     else:
-        if (error_msg := pkg_manifest_is_valid_or_error(data, from_repo=from_repo)) is not None:
+        if (error_msg := pkg_manifest_is_valid_or_error(data, from_repo=from_repo, strict=strict)) is not None:
             error_list.append(error_msg)
             if not all_errors:
                 return error_list
@@ -386,8 +397,9 @@ def pkg_manifest_from_dict_and_validate_impl(
 def pkg_manifest_from_dict_and_validate(
         data: Dict[Any, Any],
         from_repo: bool,
+        strict: bool,
 ) -> Union[PkgManifest, str]:
-    manifest = pkg_manifest_from_dict_and_validate_impl(data, from_repo=from_repo, all_errors=False)
+    manifest = pkg_manifest_from_dict_and_validate_impl(data, from_repo=from_repo, all_errors=False, strict=strict)
     if isinstance(manifest, list):
         return manifest[0]
     return manifest
@@ -396,17 +408,19 @@ def pkg_manifest_from_dict_and_validate(
 def pkg_manifest_from_dict_and_validate_all_errros(
         data: Dict[Any, Any],
         from_repo: bool,
+        strict: bool,
 ) -> Union[PkgManifest, List[str]]:
     """
     Validate the manifest and return all errors.
     """
-    return pkg_manifest_from_dict_and_validate_impl(data, from_repo=from_repo, all_errors=True)
+    return pkg_manifest_from_dict_and_validate_impl(data, from_repo=from_repo, all_errors=True, strict=strict)
 
 
 def pkg_manifest_archive_from_dict_and_validate(
         data: Dict[Any, Any],
+        strict: bool,
 ) -> Union[PkgManifest_Archive, str]:
-    manifest = pkg_manifest_from_dict_and_validate(data, from_repo=True)
+    manifest = pkg_manifest_from_dict_and_validate(data, from_repo=True, strict=strict)
     if isinstance(manifest, str):
         return manifest
 
@@ -421,7 +435,10 @@ def pkg_manifest_archive_from_dict_and_validate(
     )
 
 
-def pkg_manifest_from_toml_and_validate_all_errors(filepath: str) -> Union[PkgManifest, List[str]]:
+def pkg_manifest_from_toml_and_validate_all_errors(
+        filepath: str,
+        strict: bool,
+) -> Union[PkgManifest, List[str]]:
     """
     This function is responsible for not letting invalid manifest from creating packages with ID names
     or versions that would not properly install.
@@ -434,7 +451,7 @@ def pkg_manifest_from_toml_and_validate_all_errors(filepath: str) -> Union[PkgMa
     except Exception as ex:
         return [str(ex)]
 
-    return pkg_manifest_from_dict_and_validate_all_errros(data, from_repo=False)
+    return pkg_manifest_from_dict_and_validate_all_errros(data, from_repo=False, strict=strict)
 
 
 def pkg_zipfile_detect_subdir_or_none(
@@ -471,6 +488,7 @@ def pkg_manifest_from_zipfile_and_validate_impl(
         zip_fh: zipfile.ZipFile,
         archive_subdir: str,
         all_errors: bool,
+        strict: bool,
 ) -> Union[PkgManifest, List[str]]:
     """
     Validate the manifest and return all errors.
@@ -495,14 +513,25 @@ def pkg_manifest_from_zipfile_and_validate_impl(
     # TODO: forward actual error.
     if manifest_dict is None:
         return ["Archive does not contain a manifest"]
-    return pkg_manifest_from_dict_and_validate_impl(manifest_dict, from_repo=False, all_errors=all_errors)
+    return pkg_manifest_from_dict_and_validate_impl(
+        manifest_dict,
+        from_repo=False,
+        all_errors=all_errors,
+        strict=strict,
+    )
 
 
 def pkg_manifest_from_zipfile_and_validate(
         zip_fh: zipfile.ZipFile,
         archive_subdir: str,
+        strict: bool,
 ) -> Union[PkgManifest, str]:
-    manifest = pkg_manifest_from_zipfile_and_validate_impl(zip_fh, archive_subdir, all_errors=False)
+    manifest = pkg_manifest_from_zipfile_and_validate_impl(
+        zip_fh,
+        archive_subdir,
+        all_errors=False,
+        strict=strict,
+    )
     if isinstance(manifest, list):
         return manifest[0]
     return manifest
@@ -511,12 +540,19 @@ def pkg_manifest_from_zipfile_and_validate(
 def pkg_manifest_from_zipfile_and_validate_all_errors(
         zip_fh: zipfile.ZipFile,
         archive_subdir: str,
+        strict: bool,
 ) -> Union[PkgManifest, List[str]]:
-    return pkg_manifest_from_zipfile_and_validate_impl(zip_fh, archive_subdir, all_errors=True)
+    return pkg_manifest_from_zipfile_and_validate_impl(
+        zip_fh,
+        archive_subdir,
+        all_errors=True,
+        strict=strict,
+    )
 
 
 def pkg_manifest_from_archive_and_validate(
         filepath: str,
+        strict: bool,
 ) -> Union[PkgManifest, str]:
     try:
         zip_fh_context = zipfile.ZipFile(filepath, mode="r")
@@ -526,10 +562,10 @@ def pkg_manifest_from_archive_and_validate(
     with contextlib.closing(zip_fh_context) as zip_fh:
         if (archive_subdir := pkg_zipfile_detect_subdir_or_none(zip_fh)) is None:
             return "Archive has no manifest: \"{:s}\"".format(PKG_MANIFEST_FILENAME_TOML)
-        return pkg_manifest_from_zipfile_and_validate(zip_fh, archive_subdir)
+        return pkg_manifest_from_zipfile_and_validate(zip_fh, archive_subdir, strict=strict)
 
 
-def remote_url_from_repo_url(url: str) -> str:
+def remote_url_get(url: str) -> str:
     if REMOTE_REPO_HAS_JSON_IMPLIED:
         return url
     return urllib.parse.urljoin(url, PKG_REPO_LIST_FILENAME)
@@ -723,10 +759,6 @@ def url_retrieve_to_filepath_iter_or_filesystem(
             yield (read, size)
 
 
-# -----------------------------------------------------------------------------
-# Manifest Validation
-
-
 def pkg_idname_is_valid_or_error(pkg_idname: str) -> Optional[str]:
     if not pkg_idname.isidentifier():
         return "Not a valid identifier"
@@ -741,14 +773,51 @@ def pkg_idname_is_valid_or_error(pkg_idname: str) -> Optional[str]:
 
 # -----------------------------------------------------------------------------
 # Manifest Validation (Generic Callbacks)
+#
+# NOTE: regarding the `strict` argument, this was added because we may want to tighten
+# guidelines without causing existing repositories to fail.
+#
+# Strict is used:
+# - When building packages.
+# - When validating packages from the command line.
+#
+# However manifests from severs that don't adhere to strict rules are not prevented from loading.
 
-def pkg_manifest_validate_field_any_non_empty_string(value: str) -> Optional[str]:
+def pkg_manifest_validate_field_nop(
+        value: Any,
+        strict: bool,
+) -> Optional[str]:
+    _ = strict, value
+    return None
+
+
+def pkg_manifest_validate_field_any_non_empty_string(
+    value: str,
+    strict: bool,
+) -> Optional[str]:
+    _ = strict
     if not value.strip():
         return "A non-empty string expected"
     return None
 
 
-def pkg_manifest_validate_field_any_list_of_non_empty_strings(value: List[Any]) -> Optional[str]:
+def pkg_manifest_validate_field_any_non_empty_string_stripped_no_control_chars(
+        value: str,
+        strict: bool,
+) -> Optional[str]:
+    _ = strict
+    value_strip = value.strip()
+    if not value_strip:
+        return "a non-empty string expected"
+    if value != value_strip:
+        return "text without leading/trailing white space expected"
+    for _ in RE_CONTROL_CHARS.finditer(value):
+        return "text without any control characters expected"
+    return None
+
+
+def pkg_manifest_validate_field_any_list_of_non_empty_strings(value: List[Any], strict: bool) -> Optional[str]:
+    _ = strict
     for i, tag in enumerate(value):
         if not isinstance(tag, str):
             return "at index {:d} must be a string not a {:s}".format(i, str(type(tag)))
@@ -757,20 +826,31 @@ def pkg_manifest_validate_field_any_list_of_non_empty_strings(value: List[Any]) 
     return None
 
 
-def pkg_manifest_validate_field_any_non_empty_list_of_non_empty_strings(value: List[Any]) -> Optional[str]:
+def pkg_manifest_validate_field_any_non_empty_list_of_non_empty_strings(
+        value: List[Any],
+        strict: bool,
+) -> Optional[str]:
     if not value:
         return "list may not be empty"
 
-    return pkg_manifest_validate_field_any_list_of_non_empty_strings(value)
+    return pkg_manifest_validate_field_any_list_of_non_empty_strings(value, strict)
 
 
-def pkg_manifest_validate_field_any_version(value: str) -> Optional[str]:
+def pkg_manifest_validate_field_any_version(
+        value: str,
+        strict: bool,
+) -> Optional[str]:
+    _ = strict
     if not RE_MANIFEST_SEMVER.match(value):
         return "to be a semantic-version, found {!r}".format(value)
     return None
 
 
-def pkg_manifest_validate_field_any_version_primitive(value: str) -> Optional[str]:
+def pkg_manifest_validate_field_any_version_primitive(
+        value: str,
+        strict: bool,
+) -> Optional[str]:
+    _ = strict
     # Parse simple `1.2.3`, `1.2` & `1` numbers.
     for number in value.split("."):
         if not number.isdigit():
@@ -778,16 +858,25 @@ def pkg_manifest_validate_field_any_version_primitive(value: str) -> Optional[st
     return None
 
 
-def pkg_manifest_validate_field_any_version_primitive_or_empty(value: str) -> Optional[str]:
+def pkg_manifest_validate_field_any_version_primitive_or_empty(
+        value: str,
+        strict: bool,
+) -> Optional[str]:
     if value:
-        return pkg_manifest_validate_field_any_version_primitive(value)
+        return pkg_manifest_validate_field_any_version_primitive(value, strict)
     return None
 
 # -----------------------------------------------------------------------------
 # Manifest Validation (Specific Callbacks)
 
 
-def pkg_manifest_validate_field_type(value: str) -> Optional[str]:
+def pkg_manifest_validate_field_idname(value: str, strict: bool) -> Optional[str]:
+    _ = strict
+    return pkg_idname_is_valid_or_error(value)
+
+
+def pkg_manifest_validate_field_type(value: str, strict: bool) -> Optional[str]:
+    _ = strict
     # NOTE: add "keymap" in the future.
     value_expected = {"add-on", "theme"}
     if value not in value_expected:
@@ -795,8 +884,33 @@ def pkg_manifest_validate_field_type(value: str) -> Optional[str]:
     return None
 
 
-def pkg_manifest_validate_field_wheels(value: List[Any]) -> Optional[str]:
-    if (error := pkg_manifest_validate_field_any_list_of_non_empty_strings(value)) is not None:
+def pkg_manifest_validate_field_tagline(value: str, strict: bool) -> Optional[str]:
+    if strict:
+        if (error := pkg_manifest_validate_field_any_non_empty_string_stripped_no_control_chars(value, strict)) is not None:
+            return error
+
+        # Additional requirements.
+        if len(value) > 64:
+            return "a value no longer than 64 characters expected, found {:d}".format(len(value))
+        # As we don't have a reliable (unicode aware) punctuation check, just check the last character is alpha/numeric.
+        if value[-1].isalnum():
+            pass  # OK.
+        elif value[-1] in {")", "]", "}"}:
+            pass  # Allow closing brackets (sometimes used to mention formats).
+        else:
+            return "alpha-numeric suffix expected, the string must not end with punctuation"
+    else:
+        if (error := pkg_manifest_validate_field_any_non_empty_string(value, strict)) is not None:
+            return error
+
+    return None
+
+
+def pkg_manifest_validate_field_wheels(
+        value: List[Any],
+        strict: bool,
+) -> Optional[str]:
+    if (error := pkg_manifest_validate_field_any_list_of_non_empty_strings(value, strict)) is not None:
         return error
     # Enforce naming spec:
     # https://packaging.python.org/en/latest/specifications/binary-distribution-format/#file-name-convention
@@ -818,13 +932,21 @@ def pkg_manifest_validate_field_wheels(value: List[Any]) -> Optional[str]:
     return None
 
 
-def pkg_manifest_validate_field_archive_size(value: int) -> Optional[str]:
+def pkg_manifest_validate_field_archive_size(
+    value: int,
+    strict: bool,
+) -> Optional[str]:
+    _ = strict
     if value <= 0:
         return "to be a positive integer, found {!r}".format(value)
     return None
 
 
-def pkg_manifest_validate_field_archive_hash(value: str) -> Optional[str]:
+def pkg_manifest_validate_field_archive_hash(
+        value: str,
+        strict: bool,
+) -> Optional[str]:
+    _ = strict
     import string
     # Expect: `sha256:{HASH}`.
     # In the future we may support multiple hash types.
@@ -842,20 +964,23 @@ def pkg_manifest_validate_field_archive_hash(value: str) -> Optional[str]:
 
 # Keep in sync with `PkgManifest`.
 # key, type, check_fn.
-pkg_manifest_known_keys_and_types: Tuple[Tuple[str, type, Optional[Callable[[Any], Optional[str]]]], ...] = (
-    ("id", str, pkg_idname_is_valid_or_error),
+pkg_manifest_known_keys_and_types: Tuple[
+    Tuple[str, type, Callable[[Any, bool], Optional[str]]],
+    ...,
+] = (
+    ("id", str, pkg_manifest_validate_field_idname),
     ("schema_version", str, pkg_manifest_validate_field_any_version),
-    ("name", str, pkg_manifest_validate_field_any_non_empty_string),
-    ("tagline", str, pkg_manifest_validate_field_any_non_empty_string),
+    ("name", str, pkg_manifest_validate_field_any_non_empty_string_stripped_no_control_chars),
+    ("tagline", str, pkg_manifest_validate_field_tagline),
     ("version", str, pkg_manifest_validate_field_any_version),
     ("type", str, pkg_manifest_validate_field_type),
-    ("maintainer", str, pkg_manifest_validate_field_any_non_empty_string),
+    ("maintainer", str, pkg_manifest_validate_field_any_non_empty_string_stripped_no_control_chars),
     ("license", list, pkg_manifest_validate_field_any_non_empty_list_of_non_empty_strings),
     ("blender_version_min", str, pkg_manifest_validate_field_any_version_primitive),
 
     # Optional.
     ("blender_version_max", str, pkg_manifest_validate_field_any_version_primitive_or_empty),
-    ("website", str, pkg_manifest_validate_field_any_non_empty_string),
+    ("website", str, pkg_manifest_validate_field_any_non_empty_string_stripped_no_control_chars),
     ("copyright", list, pkg_manifest_validate_field_any_non_empty_list_of_non_empty_strings),
     ("permissions", list, pkg_manifest_validate_field_any_list_of_non_empty_strings),
     ("tags", list, pkg_manifest_validate_field_any_non_empty_list_of_non_empty_strings),
@@ -863,10 +988,13 @@ pkg_manifest_known_keys_and_types: Tuple[Tuple[str, type, Optional[Callable[[Any
 )
 
 # Keep in sync with `PkgManifest_Archive`.
-pkg_manifest_known_keys_and_types_from_repo: Tuple[Tuple[str, type, Optional[Callable[[Any], Optional[str]]]], ...] = (
+pkg_manifest_known_keys_and_types_from_repo: Tuple[
+    Tuple[str, type, Callable[[Any, bool], Optional[str]]],
+    ...,
+] = (
     ("archive_size", int, pkg_manifest_validate_field_archive_size),
     ("archive_hash", str, pkg_manifest_validate_field_archive_hash),
-    ("archive_url", str, None),
+    ("archive_url", str, pkg_manifest_validate_field_nop),
 )
 
 
@@ -878,6 +1006,7 @@ def pkg_manifest_is_valid_or_error_impl(
         *,
         from_repo: bool,
         all_errors: bool,
+        strict: bool,
 ) -> Optional[List[str]]:
     if not isinstance(data, dict):
         return ["Expected value to be a dict, not a {!r}".format(type(data))]
@@ -926,12 +1055,11 @@ def pkg_manifest_is_valid_or_error_impl(
                         return error_list
                     continue
 
-                if x_check_fn is not None:
-                    if (error_msg := x_check_fn(x_val)) is not None:
-                        error_list.append("key \"{:s}\" invalid: {:s}".format(x_key, error_msg))
-                        if not all_errors:
-                            return error_list
-                        continue
+                if (error_msg := x_check_fn(x_val, strict)) is not None:
+                    error_list.append("key \"{:s}\" invalid: {:s}".format(x_key, error_msg))
+                    if not all_errors:
+                        return error_list
+                    continue
 
             value_extract[x_key] = x_val
 
@@ -946,13 +1074,13 @@ def pkg_manifest_is_valid_or_error(
         data: Dict[str, Any],
         *,
         from_repo: bool,
-
-
+        strict: bool,
 ) -> Optional[str]:
     error_list = pkg_manifest_is_valid_or_error_impl(
         data,
         from_repo=from_repo,
         all_errors=False,
+        strict=strict,
     )
     if isinstance(error_list, list):
         return error_list[0]
@@ -963,11 +1091,13 @@ def pkg_manifest_is_valid_or_error_all(
         data: Dict[str, Any],
         *,
         from_repo: bool,
+        strict: bool,
 ) -> Optional[List[str]]:
     return pkg_manifest_is_valid_or_error_impl(
         data,
         from_repo=from_repo,
         all_errors=True,
+        strict=strict,
     )
 
 
@@ -1031,13 +1161,13 @@ def repo_json_is_valid_or_error(filepath: str) -> Optional[str]:
                 i, pkg_idname, error_msg,
             )
 
-        if (error_msg := pkg_manifest_is_valid_or_error(item, from_repo=True)) is not None:
+        if (error_msg := pkg_manifest_is_valid_or_error(item, from_repo=True, strict=False)) is not None:
             return "Error at index {:d}: {:s}".format(i, error_msg)
 
     return None
 
 
-def pkg_manifest_toml_is_valid_or_error(filepath: str) -> Tuple[Optional[str], Dict[str, Any]]:
+def pkg_manifest_toml_is_valid_or_error(filepath: str, strict: bool) -> Tuple[Optional[str], Dict[str, Any]]:
     if not os.path.exists(filepath):
         return "File missing: " + filepath, {}
 
@@ -1047,7 +1177,7 @@ def pkg_manifest_toml_is_valid_or_error(filepath: str) -> Tuple[Optional[str], D
     except BaseException as ex:
         return str(ex), {}
 
-    error = pkg_manifest_is_valid_or_error(result, from_repo=False)
+    error = pkg_manifest_is_valid_or_error(result, from_repo=False, strict=strict)
     if error is not None:
         return error, {}
     return None, result
@@ -1096,28 +1226,33 @@ def repo_local_private_dir_ensure_with_subdir(*, local_dir: str, subdir: str) ->
 def repo_sync_from_remote(
         *,
         msg_fn: MessageFn,
-        repo_dir: str,
+        remote_url: str,
         local_dir: str,
         online_user_agent: str,
         timeout_in_seconds: float,
+        extension_override: str,
 ) -> bool:
     """
     Load package information into the local path.
     """
     request_exit = False
-    request_exit |= message_status(msg_fn, "Sync repo: {:s}".format(repo_dir))
+    request_exit |= message_status(msg_fn, "Sync repo: {:s}".format(remote_url))
     if request_exit:
         return False
 
-    is_repo_filesystem = repo_is_filesystem(repo_dir=repo_dir)
+    is_repo_filesystem = repo_is_filesystem(remote_url=remote_url)
     if is_repo_filesystem:
-        remote_json_path = os.path.join(repo_dir, PKG_REPO_LIST_FILENAME)
+        remote_json_path = os.path.join(remote_url, PKG_REPO_LIST_FILENAME)
     else:
-        remote_json_path = remote_url_from_repo_url(repo_dir)
+        remote_json_path = remote_url_get(remote_url)
 
     local_private_dir = repo_local_private_dir_ensure(local_dir=local_dir)
     local_json_path = os.path.join(local_private_dir, PKG_REPO_LIST_FILENAME)
     local_json_path_temp = local_json_path + "@"
+
+    assert extension_override != "@"
+    if extension_override:
+        local_json_path = local_json_path + extension_override
 
     if os.path.exists(local_json_path_temp):
         os.unlink(local_json_path_temp)
@@ -1147,16 +1282,16 @@ def repo_sync_from_remote(
             del read_total
 
         except FileNotFoundError as ex:
-            message_error(msg_fn, "sync: file-not-found ({:s}) reading {!r}!".format(str(ex), repo_dir))
+            message_error(msg_fn, "sync: file-not-found ({:s}) reading {!r}!".format(str(ex), remote_url))
             return False
         except TimeoutError as ex:
-            message_error(msg_fn, "sync: timeout ({:s}) reading {!r}!".format(str(ex), repo_dir))
+            message_error(msg_fn, "sync: timeout ({:s}) reading {!r}!".format(str(ex), remote_url))
             return False
         except urllib.error.URLError as ex:
-            message_error(msg_fn, "sync: URL error ({:s}) reading {!r}!".format(str(ex), repo_dir))
+            message_error(msg_fn, "sync: URL error ({:s}) reading {!r}!".format(str(ex), remote_url))
             return False
         except BaseException as ex:
-            message_error(msg_fn, "sync: unexpected error ({:s}) reading {!r}!".format(str(ex), repo_dir))
+            message_error(msg_fn, "sync: unexpected error ({:s}) reading {!r}!".format(str(ex), remote_url))
             return False
 
         if request_exit:
@@ -1164,11 +1299,11 @@ def repo_sync_from_remote(
 
         error_msg = repo_json_is_valid_or_error(local_json_path_temp)
         if error_msg is not None:
-            message_error(msg_fn, "sync: invalid manifest ({:s}) reading {!r}!".format(error_msg, repo_dir))
+            message_error(msg_fn, "sync: invalid manifest ({:s}) reading {!r}!".format(error_msg, remote_url))
             return False
         del error_msg
 
-        request_exit |= message_status(msg_fn, "Sync complete: {:s}".format(repo_dir))
+        request_exit |= message_status(msg_fn, "Sync complete: {:s}".format(remote_url))
         if request_exit:
             return False
 
@@ -1177,6 +1312,9 @@ def repo_sync_from_remote(
 
         # If this is a valid JSON, overwrite the existing file.
         os.rename(local_json_path_temp, local_json_path)
+
+        if extension_override:
+            request_exit |= message_path(msg_fn, os.path.relpath(local_json_path, local_dir))
 
     return True
 
@@ -1213,8 +1351,8 @@ def repo_pkginfo_from_local_with_idname_as_key(*, local_dir: str) -> Optional[Pk
     return pkg_repo_dat_from_json(result)
 
 
-def repo_is_filesystem(*, repo_dir: str) -> bool:
-    if repo_dir.startswith(("https://", "http://")):
+def repo_is_filesystem(*, remote_url: str) -> bool:
+    if remote_url.startswith(("https://", "http://")):
         return False
     return True
 
@@ -1269,6 +1407,18 @@ def generic_arg_repo_dir(subparse: argparse.ArgumentParser) -> None:
         type=str,
         help=(
             "The remote repository directory."
+        ),
+        required=True,
+    )
+
+
+def generic_arg_remote_url(subparse: argparse.ArgumentParser) -> None:
+    subparse.add_argument(
+        "--remote-url",
+        dest="remote_url",
+        type=str,
+        help=(
+            "The remote repository URL."
         ),
         required=True,
     )
@@ -1410,6 +1560,22 @@ def generic_arg_ignore_broken_pipe(subparse: argparse.ArgumentParser) -> None:
     )
 
 
+def generic_arg_extension_override(subparse: argparse.ArgumentParser) -> None:
+    subparse.add_argument(
+        "--extension-override",
+        dest="extension_override",
+        type=str,
+        help=(
+            "Use a non-standard extension. "
+            "When a non-empty string, this extension is appended to paths written to. "
+            "This allows the actual repository file to be left untouched so it can be replaced "
+            "by the caller which can handle locking the repository."
+        ),
+        default="",
+        required=False,
+    )
+
+
 class subcmd_server:
 
     def __new__(cls) -> Any:
@@ -1422,7 +1588,7 @@ class subcmd_server:
             repo_dir: str,
     ) -> bool:
 
-        is_repo_filesystem = repo_is_filesystem(repo_dir=repo_dir)
+        is_repo_filesystem = repo_is_filesystem(remote_url=repo_dir)
         if not is_repo_filesystem:
             message_error(msg_fn, "Directory: {!r} must be local!".format(repo_dir))
             return False
@@ -1450,7 +1616,7 @@ class subcmd_server:
 
             filename = entry.name
             filepath = os.path.join(repo_dir, filename)
-            manifest = pkg_manifest_from_archive_and_validate(filepath)
+            manifest = pkg_manifest_from_archive_and_validate(filepath, strict=False)
             if isinstance(manifest, str):
                 message_warn(msg_fn, "archive validation failed {!r}, error: {:s}".format(filepath, manifest))
                 continue
@@ -1508,23 +1674,23 @@ class subcmd_client:
     @staticmethod
     def list_packages(
             msg_fn: MessageFn,
-            repo_dir: str,
+            remote_url: str,
             online_user_agent: str,
             timeout_in_seconds: float,
     ) -> bool:
-        is_repo_filesystem = repo_is_filesystem(repo_dir=repo_dir)
+        is_repo_filesystem = repo_is_filesystem(remote_url=remote_url)
         if is_repo_filesystem:
-            if not os.path.isdir(repo_dir):
-                message_error(msg_fn, "Directory: {!r} not found!".format(repo_dir))
+            if not os.path.isdir(remote_url):
+                message_error(msg_fn, "Directory: {!r} not found!".format(remote_url))
                 return False
 
         if is_repo_filesystem:
-            filepath_repo_json = os.path.join(repo_dir, PKG_REPO_LIST_FILENAME)
+            filepath_repo_json = os.path.join(remote_url, PKG_REPO_LIST_FILENAME)
             if not os.path.exists(filepath_repo_json):
                 message_error(msg_fn, "File: {!r} not found!".format(filepath_repo_json))
                 return False
         else:
-            filepath_repo_json = remote_url_from_repo_url(repo_dir)
+            filepath_repo_json = remote_url_get(remote_url)
 
         # TODO: validate JSON content.
         try:
@@ -1539,16 +1705,16 @@ class subcmd_client:
                 result.write(block)
 
         except FileNotFoundError as ex:
-            message_error(msg_fn, "list: file-not-found ({:s}) reading {!r}!".format(str(ex), repo_dir))
+            message_error(msg_fn, "list: file-not-found ({:s}) reading {!r}!".format(str(ex), remote_url))
             return False
         except TimeoutError as ex:
-            message_error(msg_fn, "list: timeout ({:s}) reading {!r}!".format(str(ex), repo_dir))
+            message_error(msg_fn, "list: timeout ({:s}) reading {!r}!".format(str(ex), remote_url))
             return False
         except urllib.error.URLError as ex:
-            message_error(msg_fn, "list: URL error ({:s}) reading {!r}!".format(str(ex), repo_dir))
+            message_error(msg_fn, "list: URL error ({:s}) reading {!r}!".format(str(ex), remote_url))
             return False
         except BaseException as ex:
-            message_error(msg_fn, "list: unexpected error ({:s}) reading {!r}!".format(str(ex), repo_dir))
+            message_error(msg_fn, "list: unexpected error ({:s}) reading {!r}!".format(str(ex), remote_url))
             return False
 
         result_str = result.getvalue().decode("utf-8")
@@ -1574,21 +1740,23 @@ class subcmd_client:
     def sync(
             msg_fn: MessageFn,
             *,
-            repo_dir: str,
+            remote_url: str,
             local_dir: str,
             online_user_agent: str,
             timeout_in_seconds: float,
             force_exit_ok: bool,
+            extension_override: str,
     ) -> bool:
         if force_exit_ok:
             force_exit_ok_enable()
 
         success = repo_sync_from_remote(
             msg_fn=msg_fn,
-            repo_dir=repo_dir,
+            remote_url=remote_url,
             local_dir=local_dir,
             online_user_agent=online_user_agent,
             timeout_in_seconds=timeout_in_seconds,
+            extension_override=extension_override,
         )
         return success
 
@@ -1624,7 +1792,7 @@ class subcmd_client:
                     )
                     return False
 
-                manifest = pkg_manifest_from_zipfile_and_validate(zip_fh, archive_subdir)
+                manifest = pkg_manifest_from_zipfile_and_validate(zip_fh, archive_subdir, strict=False)
                 if isinstance(manifest, str):
                     message_warn(
                         msg_fn,
@@ -1729,7 +1897,7 @@ class subcmd_client:
     def install_packages(
             msg_fn: MessageFn,
             *,
-            repo_dir: str,
+            remote_url: str,
             local_dir: str,
             local_cache: bool,
             packages: Sequence[str],
@@ -1737,7 +1905,7 @@ class subcmd_client:
             timeout_in_seconds: float,
     ) -> bool:
         # Extract...
-        is_repo_filesystem = repo_is_filesystem(repo_dir=repo_dir)
+        is_repo_filesystem = repo_is_filesystem(remote_url=remote_url)
         pkg_repo_data = repo_pkginfo_from_local_with_idname_as_key(local_dir=local_dir)
         if pkg_repo_data is None:
             # TODO: raise warning.
@@ -1763,7 +1931,7 @@ class subcmd_client:
                 message_error(msg_fn, "Package \"{:s}\", not found".format(pkg_idname))
                 has_error = True
                 continue
-            manifest_archive = pkg_manifest_archive_from_dict_and_validate(pkg_info)
+            manifest_archive = pkg_manifest_archive_from_dict_and_validate(pkg_info, strict=False)
             if isinstance(manifest_archive, str):
                 message_error(msg_fn, "Package malformed meta-data for \"{:s}\", error: {:s}".format(
                     pkg_idname,
@@ -1799,22 +1967,22 @@ class subcmd_client:
                 # Remote path.
                 if pkg_archive_url.startswith("./"):
                     if is_repo_filesystem:
-                        filepath_remote_archive = os.path.join(repo_dir, pkg_archive_url[2:])
+                        filepath_remote_archive = os.path.join(remote_url, pkg_archive_url[2:])
                     else:
                         if REMOTE_REPO_HAS_JSON_IMPLIED:
                             # TODO: use `urllib.parse.urlsplit(..)`.
                             # NOTE: strip the path until the directory.
                             # Convert: `https://foo.bar/bl_ext_repo.json` -> https://foo.bar/ARCHIVE_NAME
                             filepath_remote_archive = urllib.parse.urljoin(
-                                repo_dir.rpartition("/")[0],
+                                remote_url.rpartition("/")[0],
                                 pkg_archive_url[2:],
                             )
                         else:
-                            filepath_remote_archive = urllib.parse.urljoin(repo_dir, pkg_archive_url[2:])
+                            filepath_remote_archive = urllib.parse.urljoin(remote_url, pkg_archive_url[2:])
                     is_pkg_filesystem = is_repo_filesystem
                 else:
                     filepath_remote_archive = pkg_archive_url
-                    is_pkg_filesystem = repo_is_filesystem(repo_dir=pkg_archive_url)
+                    is_pkg_filesystem = repo_is_filesystem(remote_url=pkg_archive_url)
 
                 # Check if the cache should be used.
                 found = False
@@ -2009,7 +2177,7 @@ class subcmd_author:
             message_error(msg_fn, "File \"{:s}\" not found!".format(pkg_manifest_filepath))
             return False
 
-        manifest = pkg_manifest_from_toml_and_validate_all_errors(pkg_manifest_filepath)
+        manifest = pkg_manifest_from_toml_and_validate_all_errors(pkg_manifest_filepath, strict=True)
         if isinstance(manifest, list):
             for error_msg in manifest:
                 message_error(msg_fn, "Error parsing TOML \"{:s}\" {:s}".format(pkg_manifest_filepath, error_msg))
@@ -2091,7 +2259,7 @@ class subcmd_author:
             return False
 
         # Demote errors to status as the function of this action is to check the manifest is stable.
-        manifest = pkg_manifest_from_toml_and_validate_all_errors(pkg_manifest_filepath)
+        manifest = pkg_manifest_from_toml_and_validate_all_errors(pkg_manifest_filepath, strict=True)
         if isinstance(manifest, list):
             message_status(msg_fn, "Error parsing TOML \"{:s}\"".format(pkg_manifest_filepath))
             for error_msg in manifest:
@@ -2145,7 +2313,7 @@ class subcmd_author:
                 message_status(msg_fn, "Error, archive has no manifest: \"{:s}\"".format(PKG_MANIFEST_FILENAME_TOML))
                 return False
             # Demote errors to status as the function of this action is to check the manifest is stable.
-            manifest = pkg_manifest_from_zipfile_and_validate_all_errors(zip_fh, archive_subdir)
+            manifest = pkg_manifest_from_zipfile_and_validate_all_errors(zip_fh, archive_subdir, strict=True)
             if isinstance(manifest, list):
                 message_status(msg_fn, "Error parsing TOML in \"{:s}\"".format(pkg_source_archive))
                 for error_msg in manifest:
@@ -2214,7 +2382,7 @@ class subcmd_dummy:
             )
             return False
 
-        if not repo_is_filesystem(repo_dir=repo_dir):
+        if not repo_is_filesystem(remote_url=repo_dir):
             message_error(msg_fn, "Generating a repository on a remote path is not supported")
             return False
 
@@ -2357,7 +2525,7 @@ def argparse_create_client_list(subparsers: "argparse._SubParsersAction[argparse
         formatter_class=argparse.RawTextHelpFormatter,
     )
 
-    generic_arg_repo_dir(subparse)
+    generic_arg_remote_url(subparse)
     generic_arg_local_dir(subparse)
     generic_arg_online_user_agent(subparse)
 
@@ -2367,7 +2535,7 @@ def argparse_create_client_list(subparsers: "argparse._SubParsersAction[argparse
     subparse.set_defaults(
         func=lambda args: subcmd_client.list_packages(
             msg_fn_from_args(args),
-            args.repo_dir,
+            args.remote_url,
             online_user_agent=args.online_user_agent,
             timeout_in_seconds=args.timeout,
         ),
@@ -2385,22 +2553,24 @@ def argparse_create_client_sync(subparsers: "argparse._SubParsersAction[argparse
         formatter_class=argparse.RawTextHelpFormatter,
     )
 
-    generic_arg_repo_dir(subparse)
+    generic_arg_remote_url(subparse)
     generic_arg_local_dir(subparse)
     generic_arg_online_user_agent(subparse)
 
     generic_arg_output_type(subparse)
     generic_arg_timeout(subparse)
     generic_arg_ignore_broken_pipe(subparse)
+    generic_arg_extension_override(subparse)
 
     subparse.set_defaults(
         func=lambda args: subcmd_client.sync(
             msg_fn_from_args(args),
-            repo_dir=args.repo_dir,
+            remote_url=args.remote_url,
             local_dir=args.local_dir,
             online_user_agent=args.online_user_agent,
             timeout_in_seconds=args.timeout,
             force_exit_ok=args.force_exit_ok,
+            extension_override=args.extension_override,
         ),
     )
 
@@ -2435,7 +2605,7 @@ def argparse_create_client_install(subparsers: "argparse._SubParsersAction[argpa
     )
     generic_arg_package_list_positional(subparse)
 
-    generic_arg_repo_dir(subparse)
+    generic_arg_remote_url(subparse)
     generic_arg_local_dir(subparse)
     generic_arg_local_cache(subparse)
     generic_arg_online_user_agent(subparse)
@@ -2446,7 +2616,7 @@ def argparse_create_client_install(subparsers: "argparse._SubParsersAction[argpa
     subparse.set_defaults(
         func=lambda args: subcmd_client.install_packages(
             msg_fn_from_args(args),
-            repo_dir=args.repo_dir,
+            remote_url=args.remote_url,
             local_dir=args.local_dir,
             local_cache=args.local_cache,
             packages=args.packages.split(","),
